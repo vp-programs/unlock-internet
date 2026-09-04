@@ -13,6 +13,9 @@ __pycache__/
 # per-user marker of the last GitHub commit applied by the updater
 .version-gh
 
+# local distribution archive (kept on disk, not part of the repo)
+unlock_internet.rar
+
 # editor / OS noise
 Thumbs.db
 desktop.ini

@@ -1,0 +1,18 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# runtime artifacts
+*.flag
+*.log
+*.pid
+*.tmp
+*.temp
+
+# editor / OS noise
+Thumbs.db
+desktop.ini
+.DS_Store
+.vscode/
+.idea/

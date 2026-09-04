@@ -10,6 +10,10 @@ __pycache__/
 *.tmp
 *.temp
 
+# local version markers (written by the updater, differ per user)
+.version
+.version-gh
+
 # editor / OS noise
 Thumbs.db
 desktop.ini

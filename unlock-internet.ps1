@@ -810,6 +810,228 @@ function Stop-Service([string]$key) {
     Add-Log ("[mgr] " + $msg) "Yellow"
 }
 
+# ----------------------- unlock-internet update (GitHub) -----------------------
+# the launcher repo (github.com/vp-programs/unlock-internet) is PRIVATE, so every
+# API call needs a token. Resolution order: gh CLI (fastest, already logged in),
+# then a token cached in %HOME% (silent after the first run), then interactive
+# prompt. Cached token is used only for this launcher and is NOT committed to the repo.
+function Get-GhToken {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # 1) cached token (no prompts at all)
+    $cached = $HOME + "\.gh_token"
+    if (Test-Path -LiteralPath $cached) {
+        try {
+            $t = (Get-Content -LiteralPath $cached -Raw).Trim()
+            if ($t -and (Get-UiaHeadSha $t)) { return $t }
+        } catch {}
+    }
+    # 2) gh CLI
+    $ghPath = $null
+    foreach ($cand in @("C:\Program Files\GitHub CLI\gh.exe", "gh",
+                        "$env:LOCALAPPDATA\Microsoft\WinGet\Links\gh.exe")) {
+        try {
+            $g = Get-Command $cand -ErrorAction SilentlyContinue
+            if ($g) { $ghPath = $g.Source; break }
+        } catch {}
+    }
+    if ($ghPath) {
+        try {
+            $t = (& $ghPath auth token 2>&1 | Out-String).Trim()
+            if ($t -match "^[A-Za-z0-9_\-]+$" -and (Get-UiaHeadSha $t)) {
+                try { Set-Content -LiteralPath $cached -Value $t -Encoding utf8 } catch {}
+                return $t
+            }
+        } catch {}
+    }
+    # 3) ask the user
+    Write-C "  [!] GitHub access token is required (the repo is private)." "Yellow"
+    Write-C "      get one at https://github.com/settings/tokens (scope: repo)" "DarkGray"
+    while ($true) {
+        $t = (Read-Host "   paste token" -AsSecureString | ConvertFrom-SecureString)
+        if (-not $t -or $t.Length -lt 8) { Write-C "  token too short, try again" "Red"; continue }
+        if (Get-UiaHeadSha $t) {
+            try { Set-Content -LiteralPath $cached -Value $t -Encoding utf8 } catch {}
+            Write-C "  [ok] token saved for next time" "Green"
+            return $t
+        }
+        Write-C "  [X] GitHub rejected that token (401/403). try another one." "Red"
+    }
+}
+
+# HEAD commi of github.com/vp-programs/unlock-internet, or $null if the token is bad
+function Get-UiaHeadSha([string]$token) {
+    [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    try {
+        $h = @{ "User-Agent" = "unlock-internet"; "Authorization" = "Bearer $token" }
+        $c = Invoke-RestMethod -Uri "https://api.github.com/repos/vp-programs/unlock-internet/commits/HEAD" -Headers $h -TimeoutSec 20
+        return [string]$c.sha
+    } catch { return $null }
+}
+
+# downloads the repo tarball at a given sha and flattens it into $dst using the
+# built-in Windows tar.exe (libarchive handles .tar.gz). Creates $dst if needed.
+function Sync-FolderFromTar([string]$token, [string]$sha, [string]$dst) {
+    $tarExe = "tar.exe"
+    if (-not (Get-Command $tarExe -ErrorAction SilentlyContinue)) { throw "tar.exe not found (Windows 10+ required)" }
+    $tmp  = $env:TEMP + "\uia_" + (Get-Random)
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    $tarGz = Join-Path $tmp "repo.tar.gz"
+    $work  = Join-Path $tmp "extract"
+    New-Item -ItemType Directory -Path $work -Force | Out-Null
+
+    $apiBase = "https://api.github.com/repos/vp-programs/unlock-internet/tarball"
+    Write-C ("  downloading latest (commit {0}...)" -f $sha.Substring(0, 10)) "Gray"
+    $wc = New-Object System.Net.WebClient
+    $wc.Headers.Add("User-Agent", "unlock-internet")
+    $wc.Headers.Add("Authorization", "Bearer $token")
+    $wc.Headers.Add("Accept", "application/vnd.github+json")
+    $wc.DownloadFile("$apiBase/$sha", $tarGz)
+    if (-not (Test-Path $tarGz) -or (Get-Item $tarGz).Length -lt 64) { throw "download failed (empty file)" }
+    Write-C ("  {0:N1} MB downloaded, extracting..." -f ((Get-Item $tarGz).Length / 1MB)) "Gray"
+
+    & tar.exe -xzf $tarGz -C $work 2>&1 | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw "tar extraction failed ($LASTEXITCODE)" }
+    # the tarball is wrapped in a single top dir: vp-programs-unlock-internet-<sha>/
+    $topDir = (Get-ChildItem -LiteralPath $work -Directory | Select-Object -First 1).FullName
+    if (-not $topDir -or -not (Test-Path $topDir)) { $topDir = $work }
+    if (-not (Test-Path (Join-Path $topDir "unlock-internet.ps1"))) { $topDir = $work }
+
+    # copy over the live root. Copy each subtree (skip .git) so we do NOT wipe
+    # user files we restore afterwards.
+    $copied = 0; $failed = @()
+    function Copy-Rel([string]$src, [string]$rel, [string]$base, [string[]]$skip) {
+        foreach ($item in (Get-ChildItem -LiteralPath (Join-Path $src $rel) -Force)) {
+            $name = $item.Name
+            if ($skip -contains $name) { continue }
+            $subRel = if ($rel) { $rel + "\" + $name } else { $name }
+            if ($item.PSIsContainer) {
+                if (-not (Test-Path (Join-Path $base $subRel))) {
+                    try { New-Item -ItemType Directory -Path (Join-Path $base $subRel) -Force | Out-Null } catch {}
+                }
+                Copy-Rel $src $subRel $base $skip
+            } else {
+                try {
+                    $tgt = Join-Path $base $subRel
+                    if (-not (Test-Path (Split-Path $tgt -Parent))) { New-Item -ItemType Directory -Path (Split-Path $tgt -Parent) -Force | Out-Null }
+                    Copy-Item -LiteralPath $item.FullName -Destination $tgt -Force -ErrorAction Stop
+                    $script:uCopied++
+                } catch { $script:uFailed += $subRel }
+            }
+        }
+    }
+    $script:uCopied = 0; $script:uFailed = @()
+    Copy-Rel $topDir "" $dst @(".git")
+    $copied = [int]$script:uCopied; $failed = @($script:uFailed)
+
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    return @{ copied = $copied; failed = $failed }
+}
+
+function Update-UnlockInternet {
+    Set-ActiveTask "checking unlock-internet updates..." "Cyan"
+    $token = Get-GhToken
+    $remote = Get-UiaHeadSha $token
+    if (-not $remote) {
+        Write-C "  [X] cannot read repository (token invalid?)" "Red"
+        Set-ActiveTask ""
+        return $false
+    }
+    $localFile = Join-Path $ROOT ".version-gh"
+    $local = ""
+    if (Test-Path $localFile) { $local = (Get-Content -LiteralPath $localFile -Raw).Trim() }
+    if ($local -eq $remote) {
+        Write-C ("  [ok] already up to date ({0}...)" -f $remote.Substring(0, 10)) "Green"
+        Add-Log ("[mgr] unlock-internet: up to date") "Green"
+        Set-ActiveTask ""
+        return $true
+    }
+    if (-not $local) { $local = "(first run)" }
+    Write-C ("  local : {0}" -f $(if ($local.Length -gt 12) { $local.Substring(0, 12) + "..." } else { $local })) "Gray"
+    Write-C ("  remote: {0}..." -f $remote.Substring(0, 12)) "Gray"
+    $a = (Read-Host "   update? [Y/n]").Trim().ToLower()
+    if ($a -and $a -ne "y" -and $a -ne "yes") {
+        Write-C "  cancelled" "Yellow"
+        Set-ActiveTask ""
+        return $false
+    }
+
+    # ---- stop everything that holds files ----
+    Write-C "  stopping services + unmounting WinDivert..." "Yellow"
+    try { Stop-Zapret } catch {}
+    try { Stop-Tgproxy } catch {}
+    foreach ($sv in @("WinDivert14", "WinDivert")) { try { net.exe stop $sv 2>&1 | Out-Null } catch {} }
+    $pwKilled = 0
+    foreach ($pp in (Get-Process -Name "powershell" -ErrorAction SilentlyContinue)) {
+        try {
+            $cmd = (Get-CimInstance Win32_Process -Filter ("ProcessId={0}" -f $pp.Id) -ErrorAction SilentlyContinue).CommandLine
+            if ($cmd -and $cmd -match "unlock-internet" -and $pp.Id -ne $PID) {
+                $pp.Kill(); $pwKilled++
+            }
+        } catch {}
+    }
+    if ($pwKilled) { Write-C ("  killed {0} stray launcher process(es)" -f $pwKilled) "DarkGray" }
+    Start-Sleep -Milliseconds 600
+
+    # ---- save user files from local root ----
+    $tmp = $env:TEMP + "\uia_keep" + (Get-Random)
+    New-Item -ItemType Directory -Path $tmp -Force | Out-Null
+    $keepList = @("ipset-all.txt", "list-general-user.txt", "list-exclude-user.txt", "ipset-exclude-user.txt")
+    $saved = @()  # each entry: @{ dst = absolute path of the original; name = file name }
+    foreach ($f in $keepList) {
+        $src = Join-Path $ZAPRET_LST $f
+        if (Test-Path $src) {
+            $bak = Join-Path $tmp $f
+            Copy-Item -LiteralPath $src -Destination $bak -Force
+            $saved += @{ name = $f; bak = $bak; dst = (Join-Path $ZAPRET_LST $f) }
+        }
+    }
+    $flagGame = Join-Path $ZAPRET "utils\game_filter.enabled"
+    $flagUpd  = Join-Path $ZAPRET "utils\check_updates.enabled"
+    $keepFlags = @()
+    foreach ($fl in @($flagGame, $flagUpd)) {
+        if (Test-Path $fl) {
+            $bak = Join-Path $tmp ("flag__" + (Split-Path $fl -Leaf))
+            Copy-Item -LiteralPath $fl -Destination $bak -Force
+            $keepFlags += @{ dst = $fl; bak = $bak }
+        }
+    }
+
+    # ---- download + extract ----
+    try {
+        $res = Sync-FolderFromTar $token $remote $ROOT
+        if ($res.failed.Count -gt 0) {
+            Write-C ("  [!] could not overwrite {0} file(s): {1}" -f $res.failed.Count, ($res.failed -join ", ")) "Yellow"
+            Write-C "      they may be locked by an anti-virus or by the previous launcher instance." "DarkGray"
+        }
+    } catch {
+        Write-C ("  [X] update failed: {0}" -f $_) "Red"
+        Set-ActiveTask ""
+        return $false
+    }
+
+    # ---- restore user files ----
+    $restoreFailed = 0
+    foreach ($s in $saved) {
+        try { Copy-Item -LiteralPath $s.bak -Destination $s.dst -Force -ErrorAction Stop } catch { $restoreFailed++ }
+    }
+    foreach ($s in $keepFlags) {
+        try { Copy-Item -LiteralPath $s.bak -Destination $s.dst -Force -ErrorAction Stop } catch { $restoreFailed++ }
+    }
+    if (Test-Path $tmp) { Remove-Item $tmp -Recurse -Force -ErrorAction SilentlyContinue }
+    if ($restoreFailed -gt 0) {
+        Write-C ("  [!] {0} user setting(s) could not be restored" -f $restoreFailed) "Yellow"
+    }
+
+    # ---- record the version ----
+    try { Set-Content -LiteralPath $localFile -Value $remote -Encoding utf8 } catch {}
+
+    Write-C ("  [ok] unlock-internet updated to {0}... ({1} files)" -f $remote.Substring(0, 10), $res.copied) "Green"
+    Write-C "      restart the launcher to use the new version." "Cyan"
+    Add-Log ("[mgr] unlock-internet updated to {0}" -f $remote.Substring(0, 10)) "Green"
+    Set-ActiveTask ""
+    return $true
+}
+
 # ------------------------------ zapret auto-update ------------------------------
 # downloads the latest release (zip) from Flowseal/zapret-discord-youtube,
 # overwrites bin/ lists/ *.bat, preserving user files
@@ -1103,6 +1325,7 @@ function Main {
         Write-C "   -- tools --" "DarkGray"
         Write-C "   [7] Live dashboard (Q/Esc to exit)" "Gray"
          Write-C "   [9] Update ZAPRET (download latest release)" "Cyan"
+        Write-C "   [10] Update unlock-internet (from GitHub)" "Cyan"
         Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
@@ -1184,6 +1407,15 @@ function Main {
             }
             "9" {
                 [void](Update-Zapret)
+                Pause-Back
+            }
+            "10" {
+                if (-not (Test-Admin)) {
+                    Write-C "  [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
+                    Pause-Back
+                    continue
+                }
+                [void](Update-UnlockInternet)
                 Pause-Back
             }
             "0" {

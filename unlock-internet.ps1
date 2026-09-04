@@ -837,12 +837,16 @@ function Stop-Service([string]$key) {
 }
 
 # ----------------------- unlock-internet update (GitHub) -----------------------
-# the launcher repo (github.com/vp-programs/unlock-internet) is PRIVATE, so every
-# API call needs a token. Resolution order: gh CLI (fastest, already logged in),
-# then a token cached in %HOME% (silent after the first run), then interactive
-# prompt. Cached token is used only for this launcher and is NOT committed to the repo.
+# the launcher repo (github.com/vp-programs/unlock-internet) is PUBLIC, so the
+# updater works WITHOUT a token by default. A token is only needed if the repo
+# is ever made private again; in that case the resolution order is:
+#   1) gh CLI (fastest, already logged in)
+#   2) token cached in %HOME%\.gh_token (silent after the first run)
+#   3) interactive prompt
 function Get-GhToken {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
+    # if the repo is public, no token is needed at all
+    if (Get-UiaHeadSha "") { return $null }
     # 1) cached token (no prompts at all)
     $cached = $HOME + "\.gh_token"
     if (Test-Path -LiteralPath $cached) {
@@ -870,7 +874,7 @@ function Get-GhToken {
         } catch {}
     }
     # 3) ask the user
-    Write-C "  [!] GitHub access token is required (the repo is private)." "Yellow"
+    Write-C "  [!] the repo is now private — a GitHub token is required." "Yellow"
     Write-C "      get one at https://github.com/settings/tokens (scope: repo)" "DarkGray"
     while ($true) {
         $t = (Read-Host "   paste token" -AsSecureString | ConvertFrom-SecureString)
@@ -884,11 +888,13 @@ function Get-GhToken {
     }
 }
 
-# HEAD commi of github.com/vp-programs/unlock-internet, or $null if the token is bad
+# HEAD commit of github.com/vp-programs/unlock-internet, or $null if unreachable.
+# $token may be "" for public repos (no auth).
 function Get-UiaHeadSha([string]$token) {
     [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
     try {
-        $h = @{ "User-Agent" = "unlock-internet"; "Authorization" = "Bearer $token" }
+        $h = @{ "User-Agent" = "unlock-internet" }
+        if ($token) { $h["Authorization"] = "Bearer $token" }
         $c = Invoke-RestMethod -Uri "https://api.github.com/repos/vp-programs/unlock-internet/commits/HEAD" -Headers $h -TimeoutSec 20
         return [string]$c.sha
     } catch { return $null }
@@ -909,7 +915,7 @@ function Sync-FolderFromTar([string]$token, [string]$sha, [string]$dst) {
     Write-C ("  downloading latest (commit {0}...)" -f $sha.Substring(0, 10)) "Gray"
     $wc = New-Object System.Net.WebClient
     $wc.Headers.Add("User-Agent", "unlock-internet")
-    $wc.Headers.Add("Authorization", "Bearer $token")
+    if ($token) { $wc.Headers.Add("Authorization", "Bearer $token") }
     $wc.Headers.Add("Accept", "application/vnd.github+json")
     $wc.DownloadFile("$apiBase/$sha", $tarGz)
     if (-not (Test-Path $tarGz) -or (Get-Item $tarGz).Length -lt 64) { throw "download failed (empty file)" }

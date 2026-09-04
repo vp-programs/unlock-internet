@@ -334,9 +334,28 @@ function Write-Header([string]$title, [string]$color = "Cyan") {
     Write-C ("   " + $title + " " + $fill) $color
 }
 
+# current lock version: the GitHub commit sha last applied to this folder,
+# or the local git HEAD while a .git is present, else "dev".
+function Get-AppVersion {
+    $vFile = Join-Path $ROOT ".version-gh"
+    if (Test-Path $vFile) {
+        $v = (Get-Content -LiteralPath $vFile -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($v -match "^[0-9a-fA-F]{7,}$") { return $v.Substring(0, 10) }
+    }
+    $git = Join-Path $ROOT ".git"
+    if (Test-Path $git) {
+        try {
+            $h = (& git -C $ROOT rev-parse --short HEAD 2>&1 | Out-String).Trim()
+            if ($h -match "^[0-9a-fA-F]{7,}$") { return $h }
+        } catch {}
+    }
+    return "dev"
+}
+
 function Draw-Banner {
     cls
-    $title = "UNLOCK INTERNET"
+    $ver  = Get-AppVersion
+    $title = ("UNLOCK INTERNET  v{0}" -f $ver).Trim()
     $pad = " " * 4
     $bar = $title.Length + 8
     $planet = @(

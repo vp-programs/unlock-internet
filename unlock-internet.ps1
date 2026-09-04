@@ -334,21 +334,28 @@ function Write-Header([string]$title, [string]$color = "Cyan") {
     Write-C ("   " + $title + " " + $fill) $color
 }
 
-# current lock version: the GitHub commit sha last applied to this folder,
-# or the local git HEAD while a .git is present, else "dev".
+# current lock version: "version.txt" (semver, bumped with each release),
+# fall back to the GitHub commit sha, then to the local git HEAD, else "dev".
 function Get-AppVersion {
-    $vFile = Join-Path $ROOT ".version-gh"
+    $vFile = Join-Path $ROOT "version.txt"
     if (Test-Path $vFile) {
         $v = (Get-Content -LiteralPath $vFile -Raw -ErrorAction SilentlyContinue).Trim()
-        if ($v -match "^[0-9a-fA-F]{7,}$") { return $v.Substring(0, 10) }
+        if ($v -match "^[0-9]+(\.[0-9]+)*$") { return $v }
+    }
+    $gitSha = $null
+    $vGh = Join-Path $ROOT ".version-gh"
+    if (Test-Path $vGh) {
+        $v = (Get-Content -LiteralPath $vGh -Raw -ErrorAction SilentlyContinue).Trim()
+        if ($v -match "^[0-9a-fA-F]{7,}$") { $gitSha = $v.Substring(0, 10) }
     }
     $git = Join-Path $ROOT ".git"
     if (Test-Path $git) {
         try {
             $h = (& git -C $ROOT rev-parse --short HEAD 2>&1 | Out-String).Trim()
-            if ($h -match "^[0-9a-fA-F]{7,}$") { return $h }
+            if ($h -match "^[0-9a-fA-F]{7,}$") { $gitSha = $h }
         } catch {}
     }
+    if ($gitSha) { return "dev+$gitSha" }
     return "dev"
 }
 
@@ -1044,9 +1051,10 @@ function Update-UnlockInternet {
     # ---- record the version ----
     try { Set-Content -LiteralPath $localFile -Value $remote -Encoding utf8 } catch {}
 
-    Write-C ("  [ok] unlock-internet updated to {0}... ({1} files)" -f $remote.Substring(0, 10), $res.copied) "Green"
+    $newVerShown = (Get-AppVersion)
+    Write-C ("  [ok] unlock-internet updated to {0}... ({1} files)  ->  v{2}" -f $remote.Substring(0, 10), $res.copied, $newVerShown) "Green"
     Write-C "      restart the launcher to use the new version." "Cyan"
-    Add-Log ("[mgr] unlock-internet updated to {0}" -f $remote.Substring(0, 10)) "Green"
+    Add-Log ("[mgr] unlock-internet updated to {0} (v{1})" -f $remote.Substring(0, 10), $newVerShown) "Green"
     Set-ActiveTask ""
     return $true
 }

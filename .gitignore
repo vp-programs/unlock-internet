@@ -10,8 +10,7 @@ __pycache__/
 *.tmp
 *.temp
 
-# local version markers (written by the updater, differ per user)
-.version
+# per-user marker of the last GitHub commit applied by the updater
 .version-gh
 
 # editor / OS noise

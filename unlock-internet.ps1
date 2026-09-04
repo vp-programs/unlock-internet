@@ -1259,6 +1259,106 @@ function Update-Zapret {
     }
 }
 
+# ------------------------- tg-proxy diagnostics -------------------------
+# runs the proxy modules in a clean Python process and prints exactly where it
+# fails (missing Python, missing module, import error, ...). Safe: read-only.
+function Diagnose-TgProxy {
+    Set-ActiveTask "diagnosing tg-proxy..." "Cyan"
+    Write-C ""
+
+    # 1) python present at all?
+    Refresh-Path
+    $pyCmd = $null
+    foreach ($c in @("python","py")) {
+        if (Test-PythonCmd $c) { $pyCmd = $c; break }
+    }
+    if (-not $pyCmd) {
+        Write-C "  [X] PYTHON NOT FOUND. tg-proxy needs CPython 3.x." "Red"
+        Write-C "      install: https://www.python.org/downloads/  (tick 'Add python.exe to PATH')" "Yellow"
+        Set-ActiveTask ""
+        Pause-Back
+        return
+    }
+    $verLine = (& $pyCmd -c "import sys; print('python %s at %s' % (sys.version.split()[0], sys.executable))" 2>&1 | Out-String).Trim()
+    Write-C ("  [ok] {0}" -f $verLine) "Green"
+
+    # 2) required modules importable?
+    $modules = @("certifi","ssl","asyncio","socket")
+    $optMods = @("cryptography")
+    $missed = @()
+    foreach ($m in $modules) {
+        $out = (& $pyCmd -c "import $m; print('ok')" 2>&1) -join " "
+        if ($LASTEXITCODE -ne 0 -or $out -notmatch "ok") { $missed += $m }
+    }
+    if ($missed.Count -gt 0) {
+        Write-C ("  [X] MISSING MODULES: {0}" -f ($missed -join ", ")) "Red"
+        Write-C "      run:  {0} -m pip install certifi" -f $pyCmd "Yellow"
+    } else {
+        Write-C "  [ok] required modules present (certifi, ssl, asyncio)" "Green"
+    }
+    foreach ($m in $optMods) {
+        $out = (& $pyCmd -c "import $m; print('ok')" 2>&1) -join " "
+        if ($LASTEXITCODE -ne 0 -or $out -notmatch "ok") {
+            Write-C ("  [!] optional '{0}' missing (uses ctypes fallback, ok)" -f $m) "DarkYellow"
+        } else { Write-C ("  [ok] optional '{0}'" -f $m) "Green" }
+    }
+
+    # 3) actually import the proxy package (catches code import errors)
+    # write a temp .py (paths with spaces are fine in a file, unlike `python -c`)
+    $dprobe = $env:TEMP + "\tgdiag_" + (Get-Random)
+    New-Item -ItemType Directory -Path $dprobe -Force | Out-Null
+    $impPy = Join-Path $dprobe "import_probe.py"
+    $impLines = @(
+        'import sys, traceback',
+        ('sys.path.insert(0, r"{0}")' -f $TGPROXY),
+        'try:',
+        '    import proxy.tg_ws_proxy',
+        '    print("IMPORT_OK")',
+        'except Exception:',
+        '    print("IMPORT_FAIL")',
+        '    traceback.print_exc()'
+    )
+    Set-Content -LiteralPath $impPy -Value ($impLines -join "`r`n") -Encoding ASCII
+    Write-C "  [..] importing proxy.tg_ws_proxy ..." "Gray"
+    $impOut = (& $pyCmd $impPy 2>&1) | Out-String
+    if ($impOut -match "IMPORT_OK") {
+        Write-C "  [ok] proxy module imports cleanly" "Green"
+    } else {
+        Write-C "  [X] proxy module import FAILED:" "Red"
+        ($impOut -split "`r?`n") | ForEach-Object { if ($_.Trim()) { Write-C ("      {0}" -f $_.TrimStart()) "DarkGray" } }
+    }
+
+    # 4) can we bind the port?
+    $def = Get-TgProxyDefaults
+    Write-C ("  [..] testing bind port {0} ..." -f $def.port) "Gray"
+    $bindPy = Join-Path $dprobe "bind_probe.py"
+    $bindLines = @(
+        'import socket',
+        's = socket.socket(socket.AF_INET, socket.SOCK_STREAM)',
+        's.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)',
+        'try:',
+        ('    s.bind(("{0}", {1}))' -f $def.host, $def.port),
+        '    print("BIND_OK")',
+        'except Exception as e:',
+        '    print("BIND_FAIL " + str(e))',
+        'finally:',
+        '    s.close()'
+    )
+    Set-Content -LiteralPath $bindPy -Value ($bindLines -join "`r`n") -Encoding ASCII
+    $bindOut = (& $pyCmd $bindPy 2>&1) | Out-String
+    if ($bindOut -match "BIND_OK") { Write-C "  [ok] port $($def.port) is free/bindable" "Green" }
+    else {
+        Write-C ("  [X] CANNOT BIND port {0}:  {1}" -f $def.port, ($bindOut.Trim() -replace "`r?`n", " ")) "Red"
+        Write-C "      port busy or blocked. close the app holding it, or change the port." "Yellow"
+    }
+
+    if (Test-Path $dprobe) { Remove-Item $dprobe -Recurse -Force -ErrorAction SilentlyContinue }
+
+    Set-ActiveTask ""
+    Write-C ""
+    Pause-Back
+}
+
 # ------------------------- UAC: minimize -------------------------
 # removes the Y/N elevation prompts (since running as admin).
 # Does NOT enable the full secure desktop. Restart processes / the system
@@ -1359,6 +1459,7 @@ function Main {
         Write-C "   [7] Live dashboard (Q/Esc to exit)" "Gray"
          Write-C "   [9] Update ZAPRET (download latest release)" "Cyan"
         Write-C "   [10] Update unlock-internet (from GitHub)" "Cyan"
+        Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
         Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
@@ -1450,6 +1551,9 @@ function Main {
                 }
                 [void](Update-UnlockInternet)
                 Pause-Back
+            }
+            "11" {
+                [void](Diagnose-TgProxy)
             }
             "0" {
                 Write-C "  stopping everything (incl. external)..." "Yellow"

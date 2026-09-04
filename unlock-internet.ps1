@@ -612,6 +612,25 @@ function Refresh-Path {
     } catch {}
 }
 
+# run a `python -c` snippet and capture output + exit code.
+# relaxes $ErrorActionPreference for the duration so a native stderr write
+# (e.g. a missing-module traceback) does NOT escalate to a terminating error
+# under Set-StrictMode + $ErrorActionPreference='Stop'.
+function Get-PyRun([string]$pyCmd, [string]$pyCode) {
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $out  = ""
+    $exit = 1
+    try {
+        $out  = (& $pyCmd -c $pyCode 2>&1) -join " "
+        $exit = $LASTEXITCODE
+    } catch {}
+    finally {
+        $ErrorActionPreference = $prevEap
+    }
+    return [pscustomobject]@{ Out = $out; Exit = $exit }
+}
+
 # returns $true if $cmd runs a real CPython 3.x (not the Windows Store stub)
 function Test-PythonCmd([string]$cmd) {
     if (-not (Get-Command $cmd -ErrorAction SilentlyContinue)) { return $false }
@@ -1279,7 +1298,7 @@ function Diagnose-TgProxy {
         Pause-Back
         return
     }
-    $verLine = (& $pyCmd -c "import sys; print('python %s at %s' % (sys.version.split()[0], sys.executable))" 2>&1 | Out-String).Trim()
+    $verLine = (Get-PyRun $pyCmd "import sys; print('python %s at %s' % (sys.version.split()[0], sys.executable))").Out.Trim()
     Write-C ("  [ok] {0}" -f $verLine) "Green"
 
     # 2) required modules importable?
@@ -1287,8 +1306,8 @@ function Diagnose-TgProxy {
     $optMods = @("cryptography")
     $missed = @()
     foreach ($m in $modules) {
-        $out = (& $pyCmd -c "import $m; print('ok')" 2>&1) -join " "
-        if ($LASTEXITCODE -ne 0 -or $out -notmatch "ok") { $missed += $m }
+        $r = Get-PyRun $pyCmd "import $m; print('ok')"
+        if ($r.Exit -ne 0 -or $r.Out -notmatch "ok") { $missed += $m }
     }
     if ($missed.Count -gt 0) {
         Write-C ("  [X] MISSING MODULES: {0}" -f ($missed -join ", ")) "Red"
@@ -1297,8 +1316,8 @@ function Diagnose-TgProxy {
         Write-C "  [ok] required modules present (certifi, ssl, asyncio)" "Green"
     }
     foreach ($m in $optMods) {
-        $out = (& $pyCmd -c "import $m; print('ok')" 2>&1) -join " "
-        if ($LASTEXITCODE -ne 0 -or $out -notmatch "ok") {
+        $r = Get-PyRun $pyCmd "import $m; print('ok')"
+        if ($r.Exit -ne 0 -or $r.Out -notmatch "ok") {
             Write-C ("  [!] optional '{0}' missing (uses ctypes fallback, ok)" -f $m) "DarkYellow"
         } else { Write-C ("  [ok] optional '{0}'" -f $m) "Green" }
     }

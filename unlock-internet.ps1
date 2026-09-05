@@ -263,9 +263,11 @@ function Write-MenuRow {
         [string]$state,      [string]$stateColor = "White",
         [string]$value = "", [string]$valueColor = "White",
         [string]$version = $null, [string]$versionColor = "White",
-        [string]$hint = $null, [string]$hintColor = "DarkGray"
+        [string]$hint = $null, [string]$hintColor = "DarkGray",
+        [string]$nameColor = "White"
     )
     $wLead  = 3; $wNum = 4
+    if ([string]::IsNullOrEmpty($nameColor))    { $nameColor    = "White" }
     if ([string]::IsNullOrEmpty($stateColor))   { $stateColor   = "White" }
     if ([string]::IsNullOrEmpty($valueColor))   { $valueColor   = "White" }
     if ([string]::IsNullOrEmpty($versionColor)) { $versionColor = "White" }
@@ -276,7 +278,7 @@ function Write-MenuRow {
 
     $fields = @()
     if (-not [string]::IsNullOrEmpty($state))   { $fields += ,@($state, $stateColor) }
-    if (-not [string]::IsNullOrEmpty($name))    { $fields += ,@($name, "White") }
+    if (-not [string]::IsNullOrEmpty($name))    { $fields += ,@($name, $nameColor) }
     if (-not [string]::IsNullOrEmpty($value))   { $fields += ,@($value, $valueColor) }
     if (-not [string]::IsNullOrEmpty($version)) { $vTxt = "v" + $version; $fields += ,@($vTxt, $versionColor) }
     if (-not [string]::IsNullOrEmpty($hint))    { $fields += ,@($hint, $hintColor) }
@@ -1755,33 +1757,35 @@ function Main {
         Write-MenuRow "2" "TG-PROXY" $stT.token $stT.color $tVal "White" $tVer "White" $tHint $tHintCol
         Write-MenuRow "3" "" "" "" "stop everything (zapret + tg-proxy)" "White" $null "" $null ""
         Write-C ""
-        Write-Header "UNLOCK INTERNET SETTINGS" "Magenta"
+        Write-Header "UNLOCK INTERNET SETTINGS" "Blue"
         $auto = Get-AutoStartState
         $stA = Get-StateToken $auto
         $aVal = if ($auto) { "enabled (launch with Windows)" } else { "disabled" }
-        Write-MenuRow "4" "AUTOSTART" $stA.token "Cyan" $aVal "White" $null "" $null "toggle"
+        Write-MenuRow "4" "AUTOSTART" $stA.token "Green" $aVal "White" $null "" $null "toggle"
+        Write-MenuRow "5" "UAC" "" "" "minimize (no Y/N prompts)" "White" $null "" $null "apply" "Yellow"
         Write-C ""
         Write-Header "ZAPRET SETTINGS" "Magenta"
          $zg = Get-ZGameFilterState
          $stG = Get-StateToken ($zg.state -ne "disabled")
-         Write-MenuRow "5" "GAME FILT" $stG.token $stG.color ("{0}" -f $zg.state) "White" $null "" $null "change"
+         Write-MenuRow "6" "GAME FILT" $stG.token $stG.color ("{0}" -f $zg.state) "White" $null "" $null "change"
          $zi = Get-ZIpsetFilterState
          $stI = Get-StateToken ($zi.state -ne "none")
-         Write-MenuRow "6" "IPSET" $stI.token $stI.color ("{0}" -f $zi.state) "White" $null "" $null "change"
+         Write-MenuRow "7" "IPSET" $stI.token $stI.color ("{0}" -f $zi.state) "White" $null "" $null "change"
          $zcu = Get-ZCheckUpdatesState
          $stC = Get-StateToken $zcu.on
-         Write-MenuRow "7" "AUTOPDATE" $stC.token $stC.color ("{0}" -f $zcu.state) "White" $null "" $null "toggle"
-         Write-MenuRow "8"  "" "" "" "replace active fakes (.bin)" "White" $null "" $null ""
-         Write-MenuRow "9"  "" "" "" "diagnose zapret environment"  "White" $null "" $null ""
-         Write-MenuRow "10" "" "" "" "run zapret tests (utils)"     "White" $null "" $null ""
+         Write-MenuRow "8" "AUTOPDATE" $stC.token $stC.color ("{0}" -f $zcu.state) "White" $null "" $null "toggle"
+         Write-MenuRow "9"  "" "" "" "replace active fakes (.bin)" "White" $null "" $null ""
+         Write-MenuRow "10" "" "" "" "diagnose zapret environment"  "White" $null "" $null ""
+         Write-MenuRow "11" "" "" "" "run zapret tests (utils)"     "White" $null "" $null ""
         Write-C ""
-        Write-Header "ACTIONS" "DarkYellow"
-         Write-MenuRow "11" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
+        Write-Header "UPDATE" "Yellow"
          Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
          Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
-         Write-MenuRow "14" "" "" "" "live dashboard (Q/Esc to exit)"           "Gray" $null "" $null ""
-         Write-MenuRow "15" "" "" "" "UAC: minimize (no Y/N prompts)"           "White" $null "" $null ""
-          Write-C "   -- exit --" "DarkGray"
+        Write-C ""
+        Write-Header "ACTIONS" "Gray"
+         Write-MenuRow "14" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
+         Write-MenuRow "15" "" "" "" "live dashboard (Q/Esc to exit)"           "Gray" $null "" $null ""
+         Write-C "   -- exit --" "DarkGray"
           Write-C "   [0] Quit" "White"
         Write-C ""
         $sel = (Read-Host "   Choice").Trim()
@@ -1843,7 +1847,7 @@ function Main {
                 if (Set-AutoStart $on) { Add-Log ("[mgr] autostart {0}" -f $(if ($on) { "enabled" } else { "disabled" })) "Cyan" }
                 Pause-Back
             }
-            "5" {
+            "6" {
                 Write-C ""
                 Write-C ("  current: {0}" -f (Get-ZGameFilterState).state) "Gray"
                 Write-C "    [0] Off" "White"
@@ -1859,7 +1863,7 @@ function Main {
                 } else { Write-C "  invalid" "Red" }
                 Pause-Back
             }
-            "6" {
+            "7" {
                 Write-C ""
                 Write-C ("  current: {0}" -f (Get-ZIpsetFilterState).state) "Gray"
                 Write-C "    [1] loaded (specific IPs)" "White"
@@ -1874,7 +1878,7 @@ function Main {
                 } else { Write-C "  invalid" "Red" }
                 Pause-Back
             }
-            "7" {
+            "8" {
                 $st = Get-ZCheckUpdatesState
                 $on = -not $st.on
                 Set-ZCheckUpdates $on
@@ -1882,17 +1886,18 @@ function Main {
                 Write-C ("  [ok] auto-update check: {0}" -f $lbl) "Green"
                 Pause-Back
             }
-            "8" {
-                Replace-ActiveFakes
+            "5" {
+                [void](Set-UacMin)
+                Pause-Back
             }
             "9" {
-                Diagnose-Zapret
+                Replace-ActiveFakes
             }
             "10" {
-                Run-ZapretTests
+                Diagnose-Zapret
             }
             "11" {
-                [void](Diagnose-TgProxy)
+                Run-ZapretTests
             }
             "12" {
                 [void](Update-Zapret)
@@ -1908,11 +1913,10 @@ function Main {
                 Pause-Back
             }
             "14" {
-                Start-Dashboard
+                [void](Diagnose-TgProxy)
             }
             "15" {
-                [void](Set-UacMin)
-                Pause-Back
+                Start-Dashboard
             }
             "0" {
                 Write-C "  stopping everything (incl. external)..." "Yellow"

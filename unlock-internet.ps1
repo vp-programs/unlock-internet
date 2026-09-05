@@ -1378,6 +1378,231 @@ function Diagnose-TgProxy {
     Pause-Back
 }
 
+# ------------------------- zapret settings (from service.bat) -------------------------
+# game filter: utils\game_filter.enabled  (all | tcp | udp | missing=off)
+function Get-ZGameFilterState {
+    $flag = Join-Path $ZAPRET "utils\game_filter.enabled"
+    if (-not (Test-Path $flag)) { return @{ state = "disabled"; mode = "" } }
+    $m = ((Get-Content -LiteralPath $flag | Select-Object -First 1) + "").Trim().ToLower()
+    switch ($m) {
+        "all" { return @{ state = "enabled (TCP+UDP)"; mode = "all" } }
+        "tcp" { return @{ state = "enabled (TCP)";     mode = "tcp" } }
+        default { return @{ state = "enabled (UDP)";  mode = "udp" } }
+    }
+}
+function Set-ZGameFilter([string]$mode) {
+    $flag = Join-Path $ZAPRET "utils\game_filter.enabled"
+    $dir = Split-Path $flag -Parent
+    if ($mode -eq "") {
+        if (Test-Path $flag) { Remove-Item -LiteralPath $flag -Force }
+    } else {
+        New-Item -ItemType Directory -Path $dir -Force | Out-Null
+        Set-Content -LiteralPath $flag -Value $mode -Encoding ASCII
+    }
+}
+
+# ipset filter: lists\ipset-all.txt (loaded | none | any)
+function Get-ZIpsetFilterState {
+    $f = Join-Path $ZAPRET_LST "ipset-all.txt"
+    if (-not (Test-Path $f)) { return @{ state = "any";       mode = "any" } }
+    $lines = @(Get-Content -LiteralPath $f | Where-Object { ($_ + "").Trim().Length -gt 0 })
+    if ($lines.Count -eq 0) { return @{ state = "any"; mode = "any" } }
+    $raw = (Get-Content -LiteralPath $f -Raw) + ""
+    if ($raw -match "203\.0\.113\.113/32") { return @{ state = "none"; mode = "none" } }
+    return @{ state = "loaded"; mode = "loaded" }
+}
+function Set-ZIpsetFilter([string]$mode) {
+    $f = Join-Path $ZAPRET_LST "ipset-all.txt"
+    $bak = $f + ".backup"
+    switch ($mode) {
+        "none" {
+            if (Test-Path $bak) { Remove-Item -LiteralPath $bak -Force }
+            if (Test-Path $f)  { Move-Item -LiteralPath $f -Destination $bak -Force }
+            Set-Content -LiteralPath $f -Value "203.0.113.113/32" -Encoding ASCII
+        }
+        "any" {
+            Set-Content -LiteralPath $f -Value "" -Encoding ASCII
+        }
+        "loaded" {
+            if (Test-Path $bak) {
+                if (Test-Path $f) { Remove-Item -LiteralPath $f -Force }
+                Move-Item -LiteralPath $bak -Destination $f -Force
+            } else {
+                return $false
+            }
+        }
+    }
+    return $true
+}
+
+# auto-update check: utils\check_updates.enabled
+function Get-ZCheckUpdatesState {
+    $flag = Join-Path $ZAPRET "utils\check_updates.enabled"
+    $on = Test-Path $flag
+    return @{ state = $(if ($on) { "enabled" } else { "disabled" }); on = $on }
+}
+function Set-ZCheckUpdates([bool]$on) {
+    $flag = Join-Path $ZAPRET "utils\check_updates.enabled"
+    if ($on) {
+        New-Item -ItemType Directory -Path (Split-Path $flag -Parent) -Force | Out-Null
+        Set-Content -LiteralPath $flag -Value "ENABLED" -Encoding ASCII
+    } elseif (Test-Path $flag) {
+        Remove-Item -LiteralPath $flag -Force
+    }
+}
+
+# run a native command without $ErrorActionPreference='Stop' turning its stderr
+# into a terminating error; returns captured output + exit code.
+function Invoke-Native {
+    param([string]$exe, [string[]]$exeArgs = @())
+    $prevEap = $ErrorActionPreference
+    $ErrorActionPreference = "SilentlyContinue"
+    $out = ""; $code = 1
+    try { $out = (& $exe @exeArgs 2>&1 | Out-String); $code = $LASTEXITCODE } catch {}
+    finally { $ErrorActionPreference = $prevEap }
+    return [pscustomobject]@{ Out = $out; Code = $code }
+}
+
+# replace the ACTIVE_* UDP fake with another .bin from bin\
+function Replace-ActiveFakes {
+    $disc = Join-Path $ZAPRET_BIN "ACTIVE_DISCORD_UDP.bin"
+    $game = Join-Path $ZAPRET_BIN "ACTIVE_GAME_UDP.bin"
+    $fakes = @(Get-ChildItem -LiteralPath $ZAPRET_BIN -Filter "*.bin" -File -ErrorAction SilentlyContinue |
+               Where-Object { $_.BaseName -notlike "ACTIVE_*" } | Sort-Object Name)
+    if ($fakes.Count -eq 0) {
+        Write-C "  [X] no .bin fake files in bin\" "Red"
+        Write-C "      (download a zapret release that ships fake .bin files)" "Yellow"
+        Pause-Back
+        return
+    }
+    $discHash = $(if (Test-Path $disc) { (Get-FileHash -LiteralPath $disc -Algorithm SHA256).Hash } else { $null })
+    $gameHash = $(if (Test-Path $game) { (Get-FileHash -LiteralPath $game -Algorithm SHA256).Hash } else { $null })
+    $curDisc = "not found"; $curGame = "not found"
+    foreach ($f in $fakes) {
+        $h = (Get-FileHash -LiteralPath $f.FullName -Algorithm SHA256).Hash
+        if ($h -eq $discHash) { $curDisc = $f.Name }
+        if ($h -eq $gameHash) { $curGame = $f.Name }
+    }
+
+    $done = $false
+    while (-not $done) {
+        Write-C ""
+        Write-C "  Fake types:" "Cyan"
+        Write-C ("    1. Discord UDP     (current: {0})" -f $curDisc) "White"
+        Write-C ("    2. GameFilter UDP  (current: {0})" -f $curGame) "White"
+        Write-C "  Fake files:" "Cyan"
+        $i = 0
+        foreach ($f in $fakes) { $i++; Write-C ("    {0}. {1}" -f $i, $f.Name) "White" }
+        Write-C ""
+        Write-C "  Enter 'type number'  (e.g. 1 4)   or   0 to exit" "Gray"
+        $sel = (Read-Host "  Choice").Trim()
+        if ($sel -eq "0" -or $sel -eq "") { $done = $true; break }
+        $parts = @($sel -split "\s+" | Where-Object { $_ -ne "" })
+        if ($parts.Count -lt 2) {
+            Write-C "  need 'type number'" "Yellow"; Pause-Back; continue
+        }
+        $t = $parts[0]; $n = $parts[1]
+        if ($t -notmatch "^[12]$" -or $n -notmatch "^\d+$") {
+            Write-C "  invalid choice" "Yellow"; Pause-Back; continue
+        }
+        $idx = [int]$n
+        if ($idx -lt 1 -or $idx -gt $fakes.Count) {
+            Write-C "  bad file number" "Yellow"; Pause-Back; continue
+        }
+
+        if    ($t -eq "1") { $active = $disc } else { $active = $game }
+        $src = $fakes[$idx - 1].FullName
+        try {
+            Copy-Item -LiteralPath $src -Destination $active -Force
+            Write-C ("  [ok] {0} = {1}" -f (Split-Path $active -Leaf), (Split-Path $src -Leaf)) "Green"
+            if    ($t -eq "1") { $curDisc = $fakes[$idx - 1].Name }
+            else               { $curGame = $fakes[$idx - 1].Name }
+            Write-C "      restart zapret to apply" "DarkGray"
+        } catch { Write-C ("  [X] {0}" -f $_) "Red" }
+        Pause-Back
+    }
+}
+
+# environment / conflict diagnostics (ported from service.bat p.11)
+function Diagnose-Zapret {
+    Set-ActiveTask "diagnosing zapret environment..." "Cyan"
+    Write-C ""
+
+    $r = Invoke-Native "sc.exe" @("query", "BFE")
+    if ($r.Out -match "RUNNING") { Write-C "  [ok] Base Filtering Engine: running" "Green" }
+    else                         { Write-C "  [X] Base Filtering Engine NOT running (required)" "Red" }
+
+    $r = Invoke-Native "netsh" @("interface", "tcp", "show", "global")
+    $tsLine = (@($r.Out -split "`n" | Where-Object { $_ -match "Timestamp|timestamp" }) | Select-Object -First 1) + ""
+    if ($tsLine -match "enabled") { Write-C "  [ok] TCP timestamps: enabled" "Green" }
+    else {
+        Write-C "  [?] TCP timestamps disabled — enabling..." "Yellow"
+        $r = Invoke-Native "netsh" @("interface", "tcp", "set", "global", "timestamps=enabled")
+        if ($r.Code -eq 0) { Write-C "  [ok] TCP timestamps enabled" "Green" }
+        else               { Write-C "  [X] failed to enable TCP timestamps" "Red" }
+    }
+
+    $px = $null
+    try { $px = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop } catch {}
+    if ($px -and [int]$px.ProxyEnable -eq 1) {
+        Write-C ("  [?] System proxy enabled: {0} (make sure it's valid)" -f $px.ProxyServer) "Yellow"
+    } else { Write-C "  [ok] System proxy: off" "Green" }
+
+    $allSvc = (Invoke-Native "sc.exe" @("query")).Out
+
+    if (Get-Process -Name "AdguardSvc" -ErrorAction SilentlyContinue) {
+        Write-C "  [X] Adguard running — may conflict with Discord" "Red"
+    } else { Write-C "  [ok] Adguard: not running" "Green" }
+
+    $conflicts = @("Killer", "TracSrvWrapper", "EPWD", "SmartByte", "GoodbyeDPI", "discordfix_zapret", "winws1", "winws2")
+    $found = @()
+    foreach ($bad in $conflicts) { if ($allSvc -match $bad) { $found += $bad } }
+    if ($found.Count -gt 0) { Write-C ("  [X] conflicting service(s): {0}" -f ($found -join ", ")) "Red" }
+    else                    { Write-C "  [ok] no conflicting bypass services" "Green" }
+
+    if ($allSvc -match "Intel" -and $allSvc -match "Connectivity" -and $allSvc -match "Network") {
+        Write-C "  [?] Intel Connectivity Network Service found — may conflict with zapret" "Yellow"
+    }
+    if ($allSvc -match "VPN") {
+        Write-C "  [?] VPN service(s) present — disable all VPNs before testing" "Yellow"
+    } else { Write-C "  [ok] no VPN services" "Green" }
+
+    try {
+        $doh = @((Get-ChildItem "HKLM:\System\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters" -ErrorAction SilentlyContinue |
+                  Get-ItemProperty -ErrorAction SilentlyContinue) | Where-Object { $_.DohFlags -gt 0 })
+        if ($doh.Count -gt 0) { Write-C "  [?] Secure DNS (DoH) configured — verify it still works" "Yellow" }
+        else                  { Write-C "  [ok] Secure DNS (DoH): none" "Green" }
+    } catch { Write-C "  [ok] Secure DNS check: skipped" "Green" }
+
+    if ($ZAPRET -match "OneDrive") { Write-C "  [X] zapret is in a OneDrive folder — move to e.g. C:\zapret" "Red" }
+    if ($ZAPRET -match "[\u0400-\u04FF]") { Write-C "  [?] zapret path has Cyrillic characters — may break some tools" "Yellow" }
+
+    if (Get-ChildItem -LiteralPath $ZAPRET_BIN -Filter "*.sys" -ErrorAction SilentlyContinue) {
+        Write-C "  [ok] WinDivert driver present" "Green"
+    } else {
+        Write-C "  [X] WinDivert64.sys NOT found in bin" "Red"
+    }
+
+    Set-ActiveTask ""
+    Write-C ""
+    Pause-Back
+}
+
+# run the bundled configuration tests in a separate window
+function Run-ZapretTests {
+    $test = Join-Path $ZAPRET "utils\test zapret.ps1"
+    if (-not (Test-Path $test)) {
+        Write-C "  [X] utils\test zapret.ps1 not found" "Red"
+        Pause-Back
+        return
+    }
+    Write-C ("  launching: {0}" -f (Split-Path $test -Leaf)) "Cyan"
+    try {
+        Start-Process "powershell.exe" -ArgumentList "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", "`"$test`""
+    } catch { Write-C ("  [X] {0}" -f $_) "Red" }
+    Pause-Back
+}
+
 # ------------------------- UAC: minimize -------------------------
 # removes the Y/N elevation prompts (since running as admin).
 # Does NOT enable the full secure desktop. Restart processes / the system
@@ -1403,6 +1628,80 @@ function Set-UacMin {
     } catch {
         Write-C ("   [X] {0}" -f $_) "Red"
         return $false
+    }
+}
+
+# ------------------------- zapret settings submenu -------------------------
+function Show-ZapretSettings {
+    while ($true) {
+        cls
+        Draw-Banner
+        $zg  = Get-ZGameFilterState
+        $zi  = Get-ZIpsetFilterState
+        $zcu = Get-ZCheckUpdatesState
+        Write-Header "ZAPRET SETTINGS" "Magenta"
+        Write-C ("   [1] Game Filter        (current: {0})" -f $zg.state) "White"
+        Write-C ("   [2] IPSet Filter       (current: {0})" -f $zi.state) "White"
+        Write-C ("   [3] Auto-Update Check  (current: {0})" -f $zcu.state) "White"
+        Write-C "   [4] Replace active fakes (.bin)" "White"
+        Write-C "   [5] Diagnose zapret environment (conflicts)" "White"
+        Write-C "   [6] Run zapret tests (utils)" "White"
+        Write-C ""
+        Write-C "   [0] Back to main menu" "Yellow"
+        Write-C ""
+        $sel = (Read-Host "   Choice").Trim()
+        switch ($sel) {
+            "1" {
+                Write-C ""
+                Write-C ("  current: {0}" -f (Get-ZGameFilterState).state) "Gray"
+                Write-C "    [0] Off" "White"
+                Write-C "    [1] TCP + UDP" "White"
+                Write-C "    [2] TCP only" "White"
+                Write-C "    [3] UDP only" "White"
+                $c = (Read-Host "  Choice").Trim()
+                $map = @{ "0"=""; "1"="all"; "2"="tcp"; "3"="udp" }
+                if ($map.ContainsKey($c)) {
+                    Set-ZGameFilter $map[$c]
+                    Write-C ("  [ok] game filter: {0}" -f $(if ($map[$c]) { (Get-ZGameFilterState).state } else { "off" })) "Green"
+                    Write-C "      restart zapret to apply" "DarkGray"
+                } else { Write-C "  invalid" "Red" }
+                Pause-Back
+            }
+            "2" {
+                Write-C ""
+                Write-C ("  current: {0}" -f (Get-ZIpsetFilterState).state) "Gray"
+                Write-C "    [1] loaded (specific IPs)" "White"
+                Write-C "    [2] none (bypass nothing by IP)" "White"
+                Write-C "    [3] any (bypass all by IP)" "White"
+                $c = (Read-Host "  Choice").Trim()
+                $map = @{ "1"="loaded"; "2"="none"; "3"="any" }
+                if ($map.ContainsKey($c)) {
+                    [void](Set-ZIpsetFilter $map[$c])
+                    Write-C ("  [ok] ipset filter: {0}" -f (Get-ZIpsetFilterState).state) "Green"
+                    Write-C "      restart zapret to apply" "DarkGray"
+                } else { Write-C "  invalid" "Red" }
+                Pause-Back
+            }
+            "3" {
+                $st = Get-ZCheckUpdatesState
+                $on = -not $st.on
+                Set-ZCheckUpdates $on
+                $lbl = if ($on) { "enabled" } else { "disabled" }
+                Write-C ("  [ok] auto-update check: {0}" -f $lbl) "Green"
+                Pause-Back
+            }
+            "4" {
+                Replace-ActiveFakes
+            }
+            "5" {
+                Diagnose-Zapret
+            }
+            "6" {
+                Run-ZapretTests
+            }
+            "0" { return }
+            default { if ($sel -ne "") { Write-C "  invalid choice" "Red"; Start-Sleep 1 } }
+        }
     }
 }
 
@@ -1441,13 +1740,13 @@ function Main {
         $tTail = $tBody.PadRight($colW) + "  v" + $tVer
         Write-ColorParts @("   TG-PROXY : ", "White", $stT.token, $stT.color, $tTail, "White")
         Write-C ""
-        Write-Header "SETTINGS" "Magenta"
+        Write-Header "UNLOCK INTERNET SETTINGS" "Magenta"
         $auto = Get-AutoStartState
         $stA = Get-StateToken $auto
         if ($auto) { $aTail = "  enabled (launch with Windows)" }
         else       { $aTail = "  disabled" }
-        Write-ColorParts @("   AUTOSTART : ", "White", $stA.token, $stA.color, $aTail, "White")
-        $lc = Read-LastConfig
+         Write-ColorParts @("   AUTOSTART : ", "White", $stA.token, $stA.color, $aTail, "White")
+         $lc = Read-LastConfig
         $lastDesc = "none"
         if ($lc) {
             $zRaw = Get-Prop $lc "zapretRunning"
@@ -1463,6 +1762,18 @@ function Main {
         }
         Write-C ("   LAST CONF: {0}" -f $lastDesc) "Gray"
         Write-C ""
+        Write-Header "ZAPRET SETTINGS" "Magenta"
+         $zg = Get-ZGameFilterState
+         $gOn = $zg.state -ne "disabled"
+         $stG = Get-StateToken $gOn
+         Write-ColorParts @("   GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White")
+         $zi = Get-ZIpsetFilterState
+         $stI = Get-StateToken ($zi.state -ne "none")
+         Write-ColorParts @("   IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White")
+         $zcu = Get-ZCheckUpdatesState
+         $stC = Get-StateToken $zcu.on
+         Write-ColorParts @("   AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White")
+        Write-C ""
         Write-Header "ACTIONS" "White"
         Write-C "   -- services --" "DarkGray"
         Write-C "   [1] Launch ZAPRET  (choose bat-profile)" "Cyan"
@@ -1470,16 +1781,17 @@ function Main {
         Write-C "   [3] Stop ZAPRET     (incl. external)" "Yellow"
         Write-C "   [4] Stop TG-PROXY   (incl. external)" "Yellow"
         Write-C ("   [5] Stop everything  (zapret + tg-proxy)") "DarkYellow"
-        Write-C "   -- system --" "DarkGray"
-        if ($auto) { Write-C "   [6] Remove from autostart" "Magenta" }
-        else       { Write-C "   [6] Launch with Windows (autostart)" "Magenta" }
-        Write-C "   [8] UAC: minimize (no Y/N prompts)" "White"
-        Write-C "   -- tools --" "DarkGray"
-        Write-C "   [7] Live dashboard (Q/Esc to exit)" "Gray"
-         Write-C "   [9] Update ZAPRET (download latest release)" "Cyan"
-        Write-C "   [10] Update unlock-internet (from GitHub)" "Cyan"
-        Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
-        Write-C "   -- exit --" "DarkGray"
+        Write-C "   -- settings --" "DarkGray"
+        if ($auto) { Write-C "   [6] Remove from autostart" "White" }
+        else       { Write-C "   [6] Launch with Windows (autostart)" "White" }
+        Write-C "   [7] UAC: minimize (no Y/N prompts)" "White"
+        Write-C "   [8] ZAPRET SETTINGS  (menu of zapret options)" "White"
+         Write-C "   -- tools --" "DarkGray"
+         Write-C "   [9] Diagnose tg-proxy (why it won't start)" "White"
+          Write-C "   [10] Update ZAPRET (download latest release)" "Cyan"
+         Write-C "   [11] Update unlock-internet (from GitHub)" "Cyan"
+          Write-C "   [12] Live dashboard (Q/Esc to exit)" "Gray"
+          Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
         $sel = (Read-Host "   Choice").Trim()
@@ -1552,17 +1864,20 @@ function Main {
                 Pause-Back
             }
             "7" {
-                Start-Dashboard
-            }
-            "8" {
                 [void](Set-UacMin)
                 Pause-Back
             }
+            "8" {
+                Show-ZapretSettings
+            }
             "9" {
+                [void](Diagnose-TgProxy)
+            }
+            "10" {
                 [void](Update-Zapret)
                 Pause-Back
             }
-            "10" {
+            "11" {
                 if (-not (Test-Admin)) {
                     Write-C "  [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
                     Pause-Back
@@ -1571,8 +1886,8 @@ function Main {
                 [void](Update-UnlockInternet)
                 Pause-Back
             }
-            "11" {
-                [void](Diagnose-TgProxy)
+            "12" {
+                Start-Dashboard
             }
             "0" {
                 Write-C "  stopping everything (incl. external)..." "Yellow"

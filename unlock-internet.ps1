@@ -1739,18 +1739,18 @@ function Main {
          Write-ColorParts @("   [6] IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White", "   change", "DarkGray")
          $zcu = Get-ZCheckUpdatesState
          $stC = Get-StateToken $zcu.on
-         Write-ColorParts @("   [7] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
-          Write-C "   [8] Replace active fakes (.bin)" "White"
-          Write-C "   [9] Diagnose zapret environment (conflicts)" "White"
-          Write-C "   [10] Run zapret tests (utils)" "White"
+          Write-ColorParts @("   [7] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
+         Write-C "   [8] Replace active fakes (.bin)" "White"
+         Write-C "   [9] Diagnose zapret environment (conflicts)" "White"
+         Write-C "   [10] Run zapret tests (utils)" "White"
          Write-C ""
          Write-Header "ACTIONS" "White"
-          Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
-           Write-C "   [12] Update ZAPRET (download latest release)" "Cyan"
-          Write-C "   [13] Update unlock-internet (from GitHub)" "Cyan"
-           Write-C "   [14] Live dashboard (Q/Esc to exit)" "Gray"
-           Write-C "   [15] UAC: minimize (no Y/N prompts)" "White"
-          Write-C "   -- exit --" "DarkGray"
+         Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
+         Write-C "   [12] Update ZAPRET (download latest release)" "Cyan"
+         Write-C "   [13] Update unlock-internet (from GitHub)" "Cyan"
+         Write-C "   [14] Live dashboard (Q/Esc to exit)" "Gray"
+         Write-C "   [15] UAC: minimize (no Y/N prompts)" "White"
+         Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
         $sel = (Read-Host "   Choice").Trim()

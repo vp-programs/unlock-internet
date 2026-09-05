@@ -180,6 +180,30 @@ function Sync-LastConfig {
     Save-LastConfig $vals.bat $vals.host $vals.port $vals.secret $zOn $tOn
     Add-Log ("[mgr] last config saved: zapret={0} tg-proxy={1}" -f $(if ($zOn) { "on" } else { "off" }), $(if ($tOn) { "on" } else { "off" })) "DarkGray"
 }
+
+# resolve the CURRENT tg-proxy identity: running service first, then last config,
+# then defaults. Used when the tg-proxy side is NOT the thing being started
+# (e.g. we just (re)started zapret and need to record a correct tg-proxy entry).
+function Get-CurrentTgIdentity {
+    if ($Services.tgproxy -and $Services.tgproxy.host -and -not $Services.tgproxy.proc.HasExited) {
+        return @{ host = $Services.tgproxy.host; port = [int]$Services.tgproxy.port; secret = $null }
+    }
+    $def = Get-TgProxyDefaults
+    $vals = Get-LastConfigValues
+    $h = if ($vals.host) { $vals.host } else { $def.host }
+    $p = if ($vals.port) { [int]$vals.port } else { $def.port }
+    return @{ host = $h; port = $p; secret = $vals.secret }
+}
+
+# persist EXACTLY the values just used (used by the start/stop paths, so the newly
+# launched profile + host/port + real state are recorded — Sync-LastConfig would
+# otherwise just re-save the stale saved values).
+function Save-CurrentRuntime([string]$bat, [string]$hostX, [int]$portX, [string]$secret) {
+    $zOn = [bool](Get-ZapretRunning)
+    $tOn = [bool](Get-TgProxyRunning $hostX $portX)
+    Save-LastConfig $bat $hostX $portX $secret $zOn $tOn
+    Add-Log ("[mgr] last config saved: bat={0} {1}:{2} zapret={3} tg-proxy={4}" -f $(if ($bat) { (Split-Path $bat -Leaf) } else { "none" }), $hostX, $portX, $(if ($zOn) { "on" } else { "off" }), $(if ($tOn) { "on" } else { "off" })) "DarkGray"
+}
 function Read-LastConfig {
     if (-not (Test-Path $LAST_CFG)) { return $null }
     try { return (Get-Content -LiteralPath $LAST_CFG -Raw | ConvertFrom-Json) } catch { return $null }
@@ -633,8 +657,9 @@ function Start-Zapret([string]$bat) {
         return $false
     }
     $Services.zapret = @{ proc = $p; started = (Get-Date); pid = $p.Id; bat = $bat }
-    # remember profile + current state
-    Sync-LastConfig
+    # remember EXACTLY the profile just started (tg-proxy identity from last config/running)
+    $tg = Get-CurrentTgIdentity
+    Save-CurrentRuntime $bat $tg.host $tg.port $tg.secret
     Hook-Streams $p "zapret"
     Add-Log ("[mgr] zapret started (pid {0})" -f $p.Id) "White"
     Set-ActiveTask "" 
@@ -812,8 +837,9 @@ function Start-TgProxy([string]$hostX, [int]$portX, [string]$secret) {
         return $false
     }
     $Services.tgproxy = @{ proc = $p; started = (Get-Date); pid = $p.Id; host = $hostX; port = $portX }
-    # remember profile + current state
-    Sync-LastConfig
+    # remember EXACTLY the host/port/secret just started (zapret profile from last config/running)
+    $lcValsv = Get-LastConfigValues
+    Save-CurrentRuntime $lcValsv.bat $hostX $portX $secret
     Hook-Streams $p "tgproxy"
     Add-Log ("[mgr] tg-proxy started at {0}:{1} (pid {2})" -f $hostX, $portX, $p.Id) "White"
     Set-ActiveTask ""
@@ -852,7 +878,9 @@ function Stop-Zapret {
     } else {
         Write-C "   zapret stopped" "Yellow"
     }
-    Sync-LastConfig
+    # record: same profile/host/port, but zapret now OFF (state = real processes)
+    $vv = Get-LastConfigValues
+    Save-CurrentRuntime $vv.bat $vv.host $vv.port $vv.secret
 }
 
 function Stop-Tgproxy {
@@ -876,7 +904,11 @@ function Stop-Tgproxy {
     } else {
         Write-C "   tg-proxy stopped" "Yellow"
     }
-    Sync-LastConfig
+    # record: same profile/host/port, but tg-proxy now OFF
+    $vv = Get-CurrentTgIdentity
+    $lcSec = (Get-LastConfigValues).secret
+    if (-not $vv.secret) { $vv.secret = $lcSec }
+    Save-CurrentRuntime (Get-LastConfigValues).bat $vv.host $vv.port $vv.secret
 }
 
 function Kill-All {
@@ -1680,6 +1712,181 @@ function Run-ZapretTests {
     Pause-Back
 }
 
+# ------------------------- ping blocked resources -------------------------
+# quick reachability/latency check (DNS + tcp/443) for commonly blocked sites.
+# plain `ping` (ICMP) is frequently blocked even when the site works over TCP/HTTPS,
+# so we test REAL TCP connectivity instead - that reflects what a browser/app sees.
+$PING_SITES = @(
+    @{ name = "instagram"; host = "instagram.com" }
+    @{ name = "whatsapp";  host = "whatsapp.com" }
+    @{ name = "telegram";  host = "telegram.org" }
+    @{ name = "youtube";   host = "youtube.com" }
+)
+
+function Test-SitePing([string]$hostX, [int]$port = 443, [int]$timeoutMs = 3000) {
+    $sw = [System.Diagnostics.Stopwatch]::StartNew()
+    # 1) DNS
+    $ip = $null
+    try {
+        $ip = [System.Net.Dns]::GetHostAddresses($hostX) |
+              Where-Object { $_.AddressFamily -eq "InterNetwork" } |
+              Select-Object -First 1
+    } catch {}
+    if ($null -eq $ip) {
+        $sw.Stop()
+        return @{ host = $hostX; ok = $false; ip = "n/a"; latMs = -1; stage = "dns" }
+    }
+    $ipStr = $ip.IPAddressToString
+    # 2) TCP connect
+    $client = $null
+    try {
+        $client = New-Object Net.Sockets.TcpClient
+        $ar = $client.BeginConnect($hostX, $port, $null, $null)
+        $ok = $ar.AsyncWaitHandle.WaitOne($timeoutMs, $false)
+        if ($ok) { $client.EndConnect($ar) }
+        $sw.Stop()
+        if ($ok) { return @{ host = $hostX; ok = $true;  ip = $ipStr; latMs = $sw.ElapsedMilliseconds; stage = "" } }
+        return @{ host = $hostX; ok = $false; ip = $ipStr; latMs = -1; stage = "connect" }
+    } catch {
+        $sw.Stop()
+        return @{ host = $hostX; ok = $false; ip = $ipStr; latMs = -1; stage = "connect" }
+    } finally {
+        if ($client) { try { $client.Close() } catch {} }
+    }
+}
+
+# best-of-$rounds latency for one site
+function Invoke-SitePingBest([hashtable]$s, [int]$rounds = 3) {
+    $best = $null
+    $okCount = 0
+    $last = $null
+    for ($i = 1; $i -le $rounds; $i++) {
+        $r = Test-SitePing $s.host 443 3000
+        $last = $r
+        if ($r.ok) {
+            $okCount++
+            if ($null -eq $best -or ([int]$r.latMs) -lt ([int]$best.latMs)) { $best = $r }
+        }
+        Start-Sleep -Milliseconds 120
+    }
+    return @{ name = $s.name; host = $s.host; okCount = $okCount; rounds = $rounds; best = $best; last = $last }
+}
+
+function Show-RoundRow([string]$label, [hashtable]$r) {
+    if ($r.ok) { $tag = "[ok]"; $tagCol = "Green" } else { $tag = "[!!]"; $tagCol = "Red" }
+    if ($r.ok) { $val = "{0}  {1} ms" -f $r.ip, $r.latMs; $valCol = "Cyan" }
+    elseif ($r.stage -eq "dns") { $val = "DNS RESOLVE FAILED"; $valCol = "Yellow" }
+    else { $val = "{0}  tcp connect failed" -f $r.ip; $valCol = "Yellow" }
+    Write-ColorParts @($tag, $tagCol, ("  {0,-8}" -f $label), "White", $val, $valCol)
+}
+
+function Show-SiteResult([hashtable]$res) {
+    if ($res.okCount -gt 0 -and $null -ne $res.best) {
+        Write-ColorParts @(
+            "   [ok ]", "Green",
+            ("  {0,-10}" -f $res.name), "White",
+            $res.host, "Gray",
+            ("  {0} ms" -f $res.best.latMs), "Cyan",
+            ("  ({0}/{1} ok)" -f $res.okCount, $res.rounds), "DarkGray"
+        )
+    } else {
+        $last = $res.last
+        $why = if ($last -and $last.stage -eq "dns") { "DNS FAIL" }
+        elseif ($last -and $last.stage -eq "connect") { "TCP FAIL" }
+        else { "FAIL" }
+        Write-ColorParts @(
+            "   [!! ]", "Red",
+            ("  {0,-10}" -f $res.name), "White",
+            $res.host, "Gray",
+            $why, "Yellow",
+            ("  (0/{0} ok)" -f $res.rounds), "DarkGray"
+        )
+    }
+}
+
+function Ping-One([int]$idx) {
+    $s = $PING_SITES[$idx]
+    cls
+    Draw-Banner
+    Write-Header ("PING {0}" -f $s.name.ToUpper()) "Cyan"
+    Write-C ("   target : {0}   (dns + tcp/443, best of 3)" -f $s.host) "Gray"
+    Write-C ""
+    $best = $null; $okCount = 0; $last = $null
+    for ($i = 1; $i -le 3; $i++) {
+        $r = Test-SitePing $s.host 443 3000
+        $last = $r
+        Show-RoundRow ("r{0}" -f $i) $r
+        if ($r.ok) {
+            $okCount++
+            if ($null -eq $best -or ([int]$r.latMs) -lt ([int]$best.latMs)) { $best = $r }
+        }
+        Start-Sleep -Milliseconds 150
+    }
+    Write-C ""
+    if ($okCount -gt 0) {
+        Write-ColorParts @("  RESULT:", "Cyan", ("  {0} = {1} ms ({2}/3 ok)" -f $s.host, $best.latMs, $okCount), "Green")
+    } else {
+        Write-ColorParts @("  RESULT:", "Cyan", ("  {0} = UNREACHABLE (0/3 ok)" -f $s.host), "Red")
+    }
+}
+
+function Ping-All {
+    cls
+    Draw-Banner
+    Write-Header "PING ALL BLOCKED RESOURCES" "Cyan"
+    Write-C "   (dns + tcp/443, best of 3 each)" "Gray"
+    Write-C ""
+    $okTotal = 0
+    $total = $PING_SITES.Count
+    foreach ($s in $PING_SITES) {
+        $res = Invoke-SitePingBest $s 3
+        if ($res.okCount -gt 0) { $okTotal++ }
+        Show-SiteResult $res
+        Start-Sleep -Milliseconds 100
+    }
+    Write-C ""
+    if ($okTotal -eq $total) {
+        Write-ColorParts @("  SUMMARY:", "Cyan", ("  {0}/{1} reachable - network OK" -f $okTotal, $total), "Green")
+    } elseif ($okTotal -gt 0) {
+        Write-ColorParts @("  SUMMARY:", "Cyan", ("  {0}/{1} reachable - some blocked?" -f $okTotal, $total), "Yellow")
+    } else {
+        Write-ColorParts @("  SUMMARY:", "Cyan", ("  {0}/{1} reachable - no network / all blocked" -f $okTotal, $total), "Red")
+    }
+}
+
+function Run-PingMenu {
+    while ($true) {
+        cls
+        Draw-Banner
+        Write-Header "PING BLOCKED RESOURCES" "Cyan"
+        Write-C "   test real reachability + latency (dns + tcp/443)" "Gray"
+        Write-C ""
+        $i = 0
+        foreach ($s in $PING_SITES) {
+            $i++
+            Write-MenuRow $i $s.name.ToUpper() "" "" $s.host "White" $null "" "ping" "Cyan"
+        }
+        Write-MenuRow "all" "" "" "" "ping all at once" "Cyan" $null "" "" ""
+        Write-C ""
+        Write-C "   [0] back to main menu" "White"
+        Write-C ""
+        Write-Host "   Choice: " -ForegroundColor Green -NoNewline
+        $sel = [System.Console]::ReadLine()
+        if ($sel) { $sel = $sel.Trim() }
+        if ($sel -eq "0") { return }
+        if ($sel -match "^\d+$" -and [int]$sel -ge 1 -and [int]$sel -le $PING_SITES.Count) {
+            Ping-One ([int]$sel - 1)
+            Pause-Back
+        } elseif ($sel -eq "all" -or $sel -eq "*") {
+            Ping-All
+            Pause-Back
+        } elseif ($sel -ne "") {
+            Write-C "   invalid choice" "Yellow"
+            Start-Sleep -Milliseconds 600
+        }
+    }
+}
+
 # ------------------------- UAC: minimize -------------------------
 # removes the Y/N elevation prompts (since running as admin).
 # Does NOT enable the full secure desktop. Restart processes / the system
@@ -1785,10 +1992,13 @@ function Main {
         Write-Header "TG-PROXY SETTINGS" "Gray"
          Write-MenuRow "14" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
         Write-C ""
-        Write-Header "UPDATE" "Yellow"
-         Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
-         Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
-        Write-C ""
+         Write-Header "PING / DEBUG" "White"
+          Write-MenuRow "15" "" "" "" "ping blocked resources (instagram, whatsapp, telegram, youtube)" "Cyan" $null "" $null ""
+         Write-C ""
+         Write-Header "UPDATE" "Yellow"
+          Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
+          Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
+         Write-C ""
          Write-C "   -- exit --" "DarkGray"
           Write-C "   [0] Quit" "White"
         Write-C ""
@@ -1924,6 +2134,9 @@ function Main {
             }
             "14" {
                 [void](Diagnose-TgProxy)
+            }
+            "15" {
+                [void](Run-PingMenu)
             }
             "0" {
                 Write-C "   stopping everything (incl. external)..." "Yellow"

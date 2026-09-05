@@ -1,20 +1,4 @@
 $hasErrors = $false
-# Fill the whole console buffer with a full-width blank row in black bg.
-# This paints blue window background areas to black too, without touching the
-# window's default foreground/background color and without Clear-Host (which
-# repaints with the window color). Any later Write-Host / Write-Cell call
-# inherits [Console]::BackgroundColor (pinned black).
-try {
-    [Console]::BackgroundColor = [System.ConsoleColor]::Black
-    $w = [Console]::BufferWidth
-    $h = [Console]::BufferHeight
-    $blank = " " * $w
-    for ($i = 0; $i -lt $h; $i++) {
-        [Console]::SetCursorPosition(0, $i)
-        [Console]::Write($blank)
-    }
-    [Console]::SetCursorPosition(0, 0)
-} catch {}
 
 $rootDir = Split-Path $PSScriptRoot
 $listsDir = Join-Path $rootDir "lists"

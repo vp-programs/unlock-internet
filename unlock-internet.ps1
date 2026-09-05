@@ -253,6 +253,45 @@ function Write-ColorParts([object[]]$parts) {
     Write-Host ""
 }
 
+# column layout for a status row (services + settings):
+#   [N] LABEL  STATE  VALUE  VERSION  HINT
+# every field is padded to a fixed width so all rows (and the trailing
+# action hint) line up in the same columns.
+function Write-MenuRow {
+    param(
+        [string]$num,
+        [string]$name,
+        [string]$state,      [string]$stateColor = "White",
+        [string]$value = "", [string]$valueColor = "White",
+        [string]$version = $null, [string]$versionColor = "White",
+        [string]$hint = $null, [string]$hintColor = "DarkGray"
+    )
+    $wLead  = 3; $wNum = 4; $wName = 14; $wState = 6; $wValue = 34; $wVer = 10
+    $numCol   = ("[{0}]" -f $num).PadRight($wNum)
+    if ([string]::IsNullOrEmpty($name)) { $nameCol = (" " * $wName) } else { $nameCol = ($name + " :").PadRight($wName) }
+    $stateCol = if ([string]::IsNullOrEmpty($state)) { (" " * $wState) } else { $state.PadRight($wState) }
+    $valCol   = $value.PadRight($wValue)
+    if ([string]::IsNullOrEmpty($version)) { $verCol = (" " * $wVer) } else { $verCol = (" v" + $version).PadRight($wVer) }
+    if ([string]::IsNullOrEmpty($stateColor))   { $stateColor   = "White" }
+    if ([string]::IsNullOrEmpty($valueColor))   { $valueColor   = "White" }
+    if ([string]::IsNullOrEmpty($versionColor)) { $versionColor = "White" }
+    if ([string]::IsNullOrEmpty($hintColor))    { $hintColor    = "DarkGray" }
+
+    $flat = New-Object System.Collections.Generic.List[object]
+    [void]$flat.Add((" " * $wLead + $numCol)); [void]$flat.Add("White")
+    [void]$flat.Add($nameCol);                 [void]$flat.Add("White")
+    [void]$flat.Add($stateCol);                [void]$flat.Add($stateColor)
+    [void]$flat.Add($valCol);                  [void]$flat.Add($valueColor)
+    [void]$flat.Add($verCol);                  [void]$flat.Add($versionColor)
+    if ([string]::IsNullOrEmpty($hint)) {
+        # nothing more to print; skip blank hint
+    } else {
+        [void]$flat.Add("  " + $hint)
+        [void]$flat.Add($hintColor)
+    }
+    Write-ColorParts $flat.ToArray()
+}
+
 # state token: "ON"/"off" and its color
 function Get-StateToken([bool]$on) {
     if ($on) { return @{ token = "[ON ]"; color = "Green"; word = "RUNNING" } }
@@ -1693,26 +1732,23 @@ function Main {
         $tHost = if ($tMine) { $Services.tgproxy.host } else { $def.host }
         $tPort = if ($tMine) { $Services.tgproxy.port } else { $def.port }
         Write-Header "SERVICES" "Cyan"
-        $colW = 30  # the column where the version starts (same for both services)
         $stZ = Get-StateToken $zOn
         $zVer = Get-ZapretVersion
-        $zTail = ("  {0}{1}" -f $stZ.word, $zPid).PadRight($colW) + "  v" + $zVer
-        if ($zOn) { $zHint = "   stop"; $zHintCol = "Yellow" } else { $zHint = "   launch"; $zHintCol = "Cyan" }
-        Write-ColorParts @("   [1] ZAPRET   : ", "White", $stZ.token, $stZ.color, $zTail, "White", $zHint, $zHintCol)
+        $zVal = ("{0} {1}" -f $stZ.word, $zPid)
+        if   ($zOn) { $zHint = "stop";   $zHintCol = "Yellow" } else { $zHint = "launch"; $zHintCol = "Cyan" }
+        Write-MenuRow "1" "ZAPRET" $stZ.token $stZ.color $zVal "White" $zVer "White" $zHint $zHintCol
         $stT = Get-StateToken $tOn
         $tVer = Get-TgProxyVersion
-        $tBody = if ($tOn) { "  {0}  {1}:{2}" -f $stT.word, $tHost, $tPort } else { "  {0}" -f $stT.word }
-        $tTail = $tBody.PadRight($colW) + "  v" + $tVer
-        if ($tOn) { $tHint = "   stop"; $tHintCol = "Yellow" } else { $tHint = "   launch"; $tHintCol = "Cyan" }
-        Write-ColorParts @("   [2] TG-PROXY : ", "White", $stT.token, $stT.color, $tTail, "White", $tHint, $tHintCol)
-        Write-C ("   [3] STOP   everything  (zapret + tg-proxy)") "DarkYellow"
+        $tVal = if ($tOn) { ("{0} {1}:{2}" -f $stT.word, $tHost, $tPort) } else { $stT.word }
+        if   ($tOn) { $tHint = "stop";   $tHintCol = "Yellow" } else { $tHint = "launch"; $tHintCol = "Cyan" }
+        Write-MenuRow "2" "TG-PROXY" $stT.token $stT.color $tVal "White" $tVer "White" $tHint $tHintCol
+        Write-MenuRow "3" "" "" "" "stop everything (zapret + tg-proxy)" "White" $null "" $null ""
         Write-C ""
         Write-Header "UNLOCK INTERNET SETTINGS" "Magenta"
         $auto = Get-AutoStartState
         $stA = Get-StateToken $auto
-        if ($auto) { $aTail = "  enabled (launch with Windows)" }
-        else       { $aTail = "  disabled" }
-         Write-ColorParts @("   [4] AUTOSTART : ", "White", $stA.token, "Cyan", $aTail, "White", "   toggle", "DarkGray")
+        $aVal = if ($auto) { "enabled (launch with Windows)" } else { "disabled" }
+        Write-MenuRow "4" "AUTOSTART" $stA.token "Cyan" $aVal "White" $null "" $null "toggle"
          $lc = Read-LastConfig
         $lastDesc = "none"
         if ($lc) {
@@ -1727,32 +1763,31 @@ function Main {
             $lastDesc = ("{0}  +  {1}:{2}" -f $leaf, $lhost, $lport)
             $lastDesc += ("  [zapret {0} | tg-proxy {1}]" -f $zState, $tState)
         }
-        Write-C ("   LAST CONF: {0}" -f $lastDesc) "Gray"
+         $lcPrefix = ("   " + ("LAST CONF").PadRight(3 + 4 + 14 + 6))
+         Write-ColorParts @($lcPrefix, "Gray", $lastDesc, "Gray")
         Write-C ""
         Write-Header "ZAPRET SETTINGS" "Magenta"
          $zg = Get-ZGameFilterState
-         $gOn = $zg.state -ne "disabled"
-         $stG = Get-StateToken $gOn
-         Write-ColorParts @("   [5] GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White", "   change", "DarkGray")
+         $stG = Get-StateToken ($zg.state -ne "disabled")
+         Write-MenuRow "5" "GAME FILT" $stG.token $stG.color ("{0}" -f $zg.state) "White" $null "" $null "change"
          $zi = Get-ZIpsetFilterState
          $stI = Get-StateToken ($zi.state -ne "none")
-         Write-ColorParts @("   [6] IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White", "   change", "DarkGray")
+         Write-MenuRow "6" "IPSET" $stI.token $stI.color ("{0}" -f $zi.state) "White" $null "" $null "change"
          $zcu = Get-ZCheckUpdatesState
          $stC = Get-StateToken $zcu.on
-          Write-ColorParts @("   [7] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
-         Write-C "   [8] Replace active fakes (.bin)" "White"
-         Write-C "   [9] Diagnose zapret environment (conflicts)" "White"
-         Write-C "   [10] Run zapret tests (utils)" "White"
-         Write-C ""
-         Write-Header "ACTIONS" "White"
-         Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
-         Write-C "   [12] Update ZAPRET (download latest release)" "Cyan"
-         Write-C "   [13] Update unlock-internet (from GitHub)" "Cyan"
-         Write-C "   [14] Live dashboard (Q/Esc to exit)" "Gray"
-         Write-C "   [15] UAC: minimize (no Y/N prompts)" "White"
-         Write-C "   -- exit --" "DarkGray"
-        Write-C "   [0] Quit" "White"
+         Write-MenuRow "7" "AUTOPDATE" $stC.token $stC.color ("{0}" -f $zcu.state) "White" $null "" $null "toggle"
+         Write-MenuRow "8"  "" "" "" "replace active fakes (.bin)" "White" $null "" $null ""
+         Write-MenuRow "9"  "" "" "" "diagnose zapret environment"  "White" $null "" $null ""
+         Write-MenuRow "10" "" "" "" "run zapret tests (utils)"     "White" $null "" $null ""
         Write-C ""
+        Write-Header "ACTIONS" "White"
+         Write-MenuRow "11" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
+         Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
+         Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
+         Write-MenuRow "14" "" "" "" "live dashboard (Q/Esc to exit)"           "Gray" $null "" $null ""
+         Write-MenuRow "15" "" "" "" "UAC: minimize (no Y/N prompts)"           "White" $null "" $null ""
+         Write-C "   -- exit --" "DarkGray"
+         Write-C "   [0] Quit" "White"
         $sel = (Read-Host "   Choice").Trim()
 
         switch -Wildcard ($sel) {

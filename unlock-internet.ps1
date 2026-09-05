@@ -1697,22 +1697,22 @@ function Main {
         $stZ = Get-StateToken $zOn
         $zVer = Get-ZapretVersion
         $zTail = ("  {0}{1}" -f $stZ.word, $zPid).PadRight($colW) + "  v" + $zVer
-        Write-ColorParts @("   [1] ZAPRET   : ", "Cyan", $stZ.token, $stZ.color, $zTail, "White", "   launch", "DarkGray")
-        Write-ColorParts @("   [2] ZAPRET   : ", "Yellow", $stZ.token, $stZ.color, $zTail, "White", "   stop", "DarkGray")
+        if ($zOn) { $zHint = "   stop"; $zHintCol = "Yellow" } else { $zHint = "   launch"; $zHintCol = "Cyan" }
+        Write-ColorParts @("   [1] ZAPRET   : ", "White", $stZ.token, $stZ.color, $zTail, "White", $zHint, $zHintCol)
         $stT = Get-StateToken $tOn
         $tVer = Get-TgProxyVersion
         $tBody = if ($tOn) { "  {0}  {1}:{2}" -f $stT.word, $tHost, $tPort } else { "  {0}" -f $stT.word }
         $tTail = $tBody.PadRight($colW) + "  v" + $tVer
-        Write-ColorParts @("   [3] TG-PROXY : ", "Cyan", $stT.token, $stT.color, $tTail, "White", "   launch", "DarkGray")
-        Write-ColorParts @("   [4] TG-PROXY : ", "Yellow", $stT.token, $stT.color, $tTail, "White", "   stop", "DarkGray")
-        Write-C ("   [5] STOP   everything  (zapret + tg-proxy)") "DarkYellow"
+        if ($tOn) { $tHint = "   stop"; $tHintCol = "Yellow" } else { $tHint = "   launch"; $tHintCol = "Cyan" }
+        Write-ColorParts @("   [2] TG-PROXY : ", "White", $stT.token, $stT.color, $tTail, "White", $tHint, $tHintCol)
+        Write-C ("   [3] STOP   everything  (zapret + tg-proxy)") "DarkYellow"
         Write-C ""
         Write-Header "UNLOCK INTERNET SETTINGS" "Magenta"
         $auto = Get-AutoStartState
         $stA = Get-StateToken $auto
         if ($auto) { $aTail = "  enabled (launch with Windows)" }
         else       { $aTail = "  disabled" }
-         Write-ColorParts @("   [6] AUTOSTART : ", "White", $stA.token, "Cyan", $aTail, "White", "   toggle", "DarkGray")
+         Write-ColorParts @("   [4] AUTOSTART : ", "White", $stA.token, "Cyan", $aTail, "White", "   toggle", "DarkGray")
          $lc = Read-LastConfig
         $lastDesc = "none"
         if ($lc) {
@@ -1733,23 +1733,23 @@ function Main {
          $zg = Get-ZGameFilterState
          $gOn = $zg.state -ne "disabled"
          $stG = Get-StateToken $gOn
-         Write-ColorParts @("   [7] GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White", "   change", "DarkGray")
+         Write-ColorParts @("   [5] GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White", "   change", "DarkGray")
          $zi = Get-ZIpsetFilterState
          $stI = Get-StateToken ($zi.state -ne "none")
-         Write-ColorParts @("   [8] IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White", "   change", "DarkGray")
+         Write-ColorParts @("   [6] IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White", "   change", "DarkGray")
          $zcu = Get-ZCheckUpdatesState
          $stC = Get-StateToken $zcu.on
-         Write-ColorParts @("   [9] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
-         Write-C "   [10] Replace active fakes (.bin)" "White"
-         Write-C "   [11] Diagnose zapret environment (conflicts)" "White"
-         Write-C "   [12] Run zapret tests (utils)" "White"
-        Write-C ""
-        Write-Header "ACTIONS" "White"
-         Write-C "   [13] Diagnose tg-proxy (why it won't start)" "White"
-          Write-C "   [14] Update ZAPRET (download latest release)" "Cyan"
-         Write-C "   [15] Update unlock-internet (from GitHub)" "Cyan"
-          Write-C "   [16] Live dashboard (Q/Esc to exit)" "Gray"
-          Write-C "   [17] UAC: minimize (no Y/N prompts)" "White"
+         Write-ColorParts @("   [7] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
+          Write-C "   [8] Replace active fakes (.bin)" "White"
+          Write-C "   [9] Diagnose zapret environment (conflicts)" "White"
+          Write-C "   [10] Run zapret tests (utils)" "White"
+         Write-C ""
+         Write-Header "ACTIONS" "White"
+          Write-C "   [11] Diagnose tg-proxy (why it won't start)" "White"
+           Write-C "   [12] Update ZAPRET (download latest release)" "Cyan"
+          Write-C "   [13] Update unlock-internet (from GitHub)" "Cyan"
+           Write-C "   [14] Live dashboard (Q/Esc to exit)" "Gray"
+           Write-C "   [15] UAC: minimize (no Y/N prompts)" "White"
           Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
@@ -1758,71 +1758,61 @@ function Main {
         switch -Wildcard ($sel) {
             "1" {
                 if ($zOn) {
-                     Write-C "  zapret is already running" "Yellow"
-                    Pause-Back
-                    continue
-                }
-                if ($ZAPRET_BTS.Count -eq 0) {
-                    Write-C ("  [X] no .bat profiles in {0}" -f $ZAPRET) "Red"
-                    Pause-Back
-                    continue
-                }
-                Write-C ""
-                $n = 0
-                foreach ($f in $ZAPRET_BTS) {
-                    $n++
-                    Write-C ("   [{0}] {1}" -f $n, $f.Name) "White"
-                }
-                $pn = (Read-Host ("   Profile (1-{0})" -f $n) -replace "\s", "").Trim()
-                if (($pn -match "^\d+$") -and [int]$pn -ge 1 -and [int]$pn -le $n) {
-                    $batPath = $ZAPRET_BTS[[int]$pn - 1].FullName
-                    [void](Start-Zapret $batPath)
+                    Write-C "  stopping zapret (incl. external)..." "Yellow"
+                    Stop-Zapret
+                } else {
+                    if ($ZAPRET_BTS.Count -eq 0) {
+                        Write-C ("  [X] no .bat profiles in {0}" -f $ZAPRET) "Red"
+                        Pause-Back
+                        continue
+                    }
+                    Write-C ""
+                    $n = 0
+                    foreach ($f in $ZAPRET_BTS) {
+                        $n++
+                        Write-C ("   [{0}] {1}" -f $n, $f.Name) "White"
+                    }
+                    $pn = (Read-Host ("   Profile (1-{0})" -f $n) -replace "\s", "").Trim()
+                    if (($pn -match "^\d+$") -and [int]$pn -ge 1 -and [int]$pn -le $n) {
+                        $batPath = $ZAPRET_BTS[[int]$pn - 1].FullName
+                        [void](Start-Zapret $batPath)
+                    }
                 }
                 Pause-Back
             }
             "2" {
-                Write-C "  stopping zapret (incl. external)..." "Yellow"
-                Stop-Zapret
+                if ($tOn) {
+                    Write-C "  stopping tg-proxy (incl. external)..." "Yellow"
+                    Stop-Tgproxy
+                } else {
+                    $h = "127.0.0.1"; $p = 1443; $s = $null
+                    if (Test-Path $CFG_JSON) {
+                        try {
+                            $cfg = Get-Content -LiteralPath $CFG_JSON -Raw | ConvertFrom-Json
+                            if ($cfg.host)   { $h = [string]$cfg.host }
+                            if ($cfg.port)   { $p = [int]$cfg.port }
+                            if ($cfg.secret) { $s = [string]$cfg.secret }
+                        } catch {}
+                    }
+                    Write-C ("   saved config: host={0} port={1} secret={2}" -f $h, $p, $(if ($s) { "yes" } else { "no" })) "Gray"
+                    $hn = (Read-Host "   host [$h]").Trim(); if ($hn) { $h = $hn }
+                    $pp = (Read-Host "   port [$p]").Trim(); if ($pp -match "^\d+$") { $p = [int]$pp }
+                    $ss = (Read-Host "   secret [$s]").Trim(); if ($ss) { $s = $ss }
+                    [void](Start-TgProxy $h $p $s)
+                }
                 Pause-Back
             }
             "3" {
-                if ($tOn) {
-                     Write-C "  proxy is already running" "Yellow"
-                    Pause-Back
-                    continue
-                }
-                $h = "127.0.0.1"; $p = 1443; $s = $null
-                if (Test-Path $CFG_JSON) {
-                    try {
-                        $cfg = Get-Content -LiteralPath $CFG_JSON -Raw | ConvertFrom-Json
-                        if ($cfg.host)   { $h = [string]$cfg.host }
-                        if ($cfg.port)   { $p = [int]$cfg.port }
-                        if ($cfg.secret) { $s = [string]$cfg.secret }
-                    } catch {}
-                }
-                Write-C ("   saved config: host={0} port={1} secret={2}" -f $h, $p, $(if ($s) { "yes" } else { "no" })) "Gray"
-                $hn = (Read-Host "   host [$h]").Trim(); if ($hn) { $h = $hn }
-                $pp = (Read-Host "   port [$p]").Trim(); if ($pp -match "^\d+$") { $p = [int]$pp }
-                $ss = (Read-Host "   secret [$s]").Trim(); if ($ss) { $s = $ss }
-                [void](Start-TgProxy $h $p $s)
-                Pause-Back
-            }
-            "4" {
-                Write-C "  stopping tg-proxy (incl. external)..." "Yellow"
-                Stop-Tgproxy
-                Pause-Back
-            }
-            "5" {
                 Write-C "  stopping everything (incl. external)..." "Yellow"
                 Kill-All
                 Pause-Back
             }
-            "6" {
+            "4" {
                 $on = -not (Get-AutoStartState)
                 if (Set-AutoStart $on) { Add-Log ("[mgr] autostart {0}" -f $(if ($on) { "enabled" } else { "disabled" })) "Cyan" }
                 Pause-Back
             }
-            "7" {
+            "5" {
                 Write-C ""
                 Write-C ("  current: {0}" -f (Get-ZGameFilterState).state) "Gray"
                 Write-C "    [0] Off" "White"
@@ -1838,7 +1828,7 @@ function Main {
                 } else { Write-C "  invalid" "Red" }
                 Pause-Back
             }
-            "8" {
+            "6" {
                 Write-C ""
                 Write-C ("  current: {0}" -f (Get-ZIpsetFilterState).state) "Gray"
                 Write-C "    [1] loaded (specific IPs)" "White"
@@ -1853,7 +1843,7 @@ function Main {
                 } else { Write-C "  invalid" "Red" }
                 Pause-Back
             }
-            "9" {
+            "7" {
                 $st = Get-ZCheckUpdatesState
                 $on = -not $st.on
                 Set-ZCheckUpdates $on
@@ -1861,23 +1851,23 @@ function Main {
                 Write-C ("  [ok] auto-update check: {0}" -f $lbl) "Green"
                 Pause-Back
             }
-            "10" {
+            "8" {
                 Replace-ActiveFakes
             }
-            "11" {
+            "9" {
                 Diagnose-Zapret
             }
-            "12" {
+            "10" {
                 Run-ZapretTests
             }
-            "13" {
+            "11" {
                 [void](Diagnose-TgProxy)
             }
-            "14" {
+            "12" {
                 [void](Update-Zapret)
                 Pause-Back
             }
-            "15" {
+            "13" {
                 if (-not (Test-Admin)) {
                     Write-C "  [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
                     Pause-Back
@@ -1886,10 +1876,10 @@ function Main {
                 [void](Update-UnlockInternet)
                 Pause-Back
             }
-            "16" {
+            "14" {
                 Start-Dashboard
             }
-            "17" {
+            "15" {
                 [void](Set-UacMin)
                 Pause-Back
             }

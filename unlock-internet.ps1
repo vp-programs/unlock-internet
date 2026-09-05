@@ -198,10 +198,10 @@ function Set-AutoStart([bool]$on) {
         # hidden powershell + --autostart
         $cmd = '"powershell.exe" -NoProfile -ExecutionPolicy Bypass -WindowStyle Hidden -File "{0}" --autostart' -f (Join-Path $here "unlock-internet.ps1")
         try { New-ItemProperty -Path $AUTO_KEY -Name $AUTO_NAME -PropertyType String -Value $cmd -Force | Out-Null
-              Write-C "  added to autostart" "Cyan"; return $true } catch { Write-C ("  [X] {0}" -f $_) "Red"; return $false }
+              Write-C "   added to autostart" "Cyan"; return $true } catch { Write-C ("  [X] {0}" -f $_) "Red"; return $false }
     } else {
         try { Remove-ItemProperty -Path $AUTO_KEY -Name $AUTO_NAME -Force -ErrorAction Stop | Out-Null
-              Write-C "  removed from autostart" "Yellow"; return $true } catch { Write-C "  autostart entry not found" "Gray"; return $true }
+              Write-C "   removed from autostart" "Yellow"; return $true } catch { Write-C "   autostart entry not found" "Gray"; return $true }
     }
 }
 
@@ -366,8 +366,9 @@ function Hook-Streams([System.Diagnostics.Process]$p, [string]$name) {
 
 # ----------------------------------- Banner -----------------------------------
 function Write-Header([string]$title, [string]$color = "Cyan") {
-    $fill = "-" * 44
-    Write-C ("   " + $title + " " + $fill) $color
+    $lineLen = 46
+    $fill = [Math]::Max(1, $lineLen - 4 - $title.Length)
+    Write-C ("   " + $title + " " + ("-" * $fill)) $color
 }
 
 # current lock version: "version.txt" (semver, bumped with each release),
@@ -399,12 +400,12 @@ function Draw-Banner {
     cls
     $ver  = Get-AppVersion
     $title = ("UNLOCK INTERNET  v{0}" -f $ver).Trim()
-    $pad = " " * 4
-    $bar = $title.Length + 8
+    $padL = [Math]::Floor((42 - $title.Length) / 2)
+    $padR = (42 - $title.Length) - $padL
     $planet = @(
-        ("  +" + ("-" * $bar) + "+"),
-        ("  |" + $pad + $title + $pad + "|"),
-        ("  +" + ("-" * $bar) + "+")
+        ("  +" + ("-" * 42) + "+"),
+        ("  |" + (" " * $padL) + $title + (" " * $padR) + "|"),
+        ("  +" + ("-" * 42) + "+")
     )
     foreach ($l in $planet) { Write-C $l "Cyan" }
     Write-C ""
@@ -626,7 +627,7 @@ function Start-Zapret([string]$bat) {
     try {
         if (-not $p.Start()) { throw "Start() failed" }
     } catch {
-        Write-C "  [X] failed to start: $_" "Red"
+        Write-C "   [X] failed to start: $_" "Red"
         Write-C "      WinDivert requires Administrator. Run launcher elevated." "Yellow"
         Set-ActiveTask "" 
         return $false
@@ -689,14 +690,14 @@ function Ensure-Python {
     foreach ($c in @("python","py")) {
         if (Test-PythonCmd $c) { return $c }
     }
-    Write-C "  [!] python not found — starting automatic install..." "Yellow"
+    Write-C "   [!] python not found — starting automatic install..." "Yellow"
 
     # 1) winget (preferred)
     $winget = $null
     if (Get-Command winget -ErrorAction SilentlyContinue) { $winget = "winget" }
     if ($winget) {
         Set-ActiveTask "installing Python via winget..." "Cyan"
-        Write-C "  winget install Python.Python.3.12 (silent) ..." "Cyan"
+        Write-C "   winget install Python.Python.3.12 (silent) ..." "Cyan"
         try {
             $p = Start-Process -FilePath $winget -ArgumentList @(
                 "install","--id","Python.Python.3.12","--exact",
@@ -707,11 +708,11 @@ function Ensure-Python {
         Refresh-Path
         foreach ($c in @("python","py")) {
             if (Test-PythonCmd $c) {
-                Write-C "  [ok] Python installed via winget" "Green"
+                Write-C "   [ok] Python installed via winget" "Green"
                 return $c
             }
         }
-        Write-C "  winget install unavailable / failed — falling back to direct download" "Yellow"
+        Write-C "   winget install unavailable / failed — falling back to direct download" "Yellow"
     }
 
     # 2) direct installer from python.org
@@ -720,14 +721,14 @@ function Ensure-Python {
     $url = "https://www.python.org/ftp/python/$ver/python-$ver-amd64.exe"
     $tmp = Join-Path $env:TEMP ("python_installer_" + (Get-Random) + ".exe")
     try {
-        Write-C "  downloading $ver (~25 MB) ..." "Cyan"
+        Write-C "   downloading $ver (~25 MB) ..." "Cyan"
         [Net.ServicePointManager]::SecurityProtocol = [Net.SecurityProtocolType]::Tls12
         $wc = New-Object System.Net.WebClient
         $wc.Headers.Add("User-Agent", "unlock-internet")
         [void]$wc.DownloadFile($url, $tmp)
 
         Set-ActiveTask "installing Python silently..." "Cyan"
-        Write-C "  running installer (/quiet InstallAllUsers=1 PrependPath=1) ..." "Cyan"
+        Write-C "   running installer (/quiet InstallAllUsers=1 PrependPath=1) ..." "Cyan"
         $pi = Start-Process -FilePath $tmp -ArgumentList @(
             "/quiet","InstallAllUsers=1","PrependPath=1",
             "Include_launcher=1","Include_pip=1","Include_test=0","Shortcuts=1"
@@ -742,11 +743,11 @@ function Ensure-Python {
     Refresh-Path
     foreach ($c in @("python","py")) {
         if (Test-PythonCmd $c) {
-            Write-C "  [ok] Python installed" "Green"
+            Write-C "   [ok] Python installed" "Green"
             return $c
         }
     }
-    Write-C "  [X] python auto-install failed — install manually: https://www.python.org/downloads/" "Red"
+    Write-C "   [X] python auto-install failed — install manually: https://www.python.org/downloads/" "Red"
     Set-ActiveTask ""
     return $null
 }
@@ -763,7 +764,7 @@ function Ensure-PipModule([string]$pyCmd, [string]$module) {
         # ensure pip itself exists (installer with Include_pip=1 does, Store build may not)
         $pipOut = (& $pyCmd -m pip --version 2>&1) -join " "
         if ($LASTEXITCODE -ne 0) {
-            Write-C "  pip not present — running ensurepip ..." "Yellow"
+            Write-C "   pip not present — running ensurepip ..." "Yellow"
             [void](& $pyCmd -m ensurepip --upgrade 2>&1)
         }
         [void](& $pyCmd -m pip install --quiet --disable-pip-version-check $module 2>&1)
@@ -806,7 +807,7 @@ function Start-TgProxy([string]$hostX, [int]$portX, [string]$secret) {
     try {
         if (-not $p.Start()) { throw "Start() failed" }
     } catch {
-        Write-C "  [X] failed to start: $_" "Red"
+        Write-C "   [X] failed to start: $_" "Red"
         Set-ActiveTask ""
         return $false
     }
@@ -842,14 +843,14 @@ function Stop-Zapret {
          Write-C ("  killed {0} winws.exe (including external)" -f $w0.Count) "Yellow"
         Add-Log ("[mgr] killed {0} winws.exe" -f $w0.Count) "Yellow"
     } else {
-        Write-C "  winws.exe: none" "Gray"
+        Write-C "   winws.exe: none" "Gray"
     }
     # 3) final check
     Start-Sleep -Milliseconds 400
     if (Get-Process -Name "winws" -ErrorAction SilentlyContinue) {
-         Write-C "  [!] winws.exe is still alive — try taskkill /F /IM winws.exe manually" "Red"
+         Write-C "   [!] winws.exe is still alive — try taskkill /F /IM winws.exe manually" "Red"
     } else {
-        Write-C "  zapret stopped" "Yellow"
+        Write-C "   zapret stopped" "Yellow"
     }
     Sync-LastConfig
 }
@@ -868,12 +869,12 @@ function Stop-Tgproxy {
             }
         } catch {}
     }
-    if ($killed -eq 0) { Write-C "  tg-proxy (external): none" "Gray" }
+    if ($killed -eq 0) { Write-C "   tg-proxy (external): none" "Gray" }
     # 2) final check
     if (Get-TgProxyRunning (Get-TgProxyDefaults).host (Get-TgProxyDefaults).port) {
-         Write-C "  [!] tg-proxy is still responding — check the port" "Red"
+         Write-C "   [!] tg-proxy is still responding — check the port" "Red"
     } else {
-        Write-C "  tg-proxy stopped" "Yellow"
+        Write-C "   tg-proxy stopped" "Yellow"
     }
     Sync-LastConfig
 }
@@ -937,17 +938,17 @@ function Get-GhToken {
         } catch {}
     }
     # 3) ask the user
-    Write-C "  [!] the repo is now private — a GitHub token is required." "Yellow"
+    Write-C "   [!] the repo is now private — a GitHub token is required." "Yellow"
     Write-C "      get one at https://github.com/settings/tokens (scope: repo)" "DarkGray"
     while ($true) {
         $t = (Read-Host "   paste token" -AsSecureString | ConvertFrom-SecureString)
-        if (-not $t -or $t.Length -lt 8) { Write-C "  token too short, try again" "Red"; continue }
+        if (-not $t -or $t.Length -lt 8) { Write-C "   token too short, try again" "Red"; continue }
         if (Get-UiaHeadSha $t) {
             try { Set-Content -LiteralPath $cached -Value $t -Encoding utf8 } catch {}
-            Write-C "  [ok] token saved for next time" "Green"
+            Write-C "   [ok] token saved for next time" "Green"
             return $t
         }
-        Write-C "  [X] GitHub rejected that token (401/403). try another one." "Red"
+        Write-C "   [X] GitHub rejected that token (401/403). try another one." "Red"
     }
 }
 
@@ -1057,7 +1058,7 @@ function Update-UnlockInternet {
     $token = Get-GhToken
     $remote = Get-UiaHeadSha $token
     if (-not $remote) {
-        Write-C "  [X] cannot read repository (token invalid?)" "Red"
+        Write-C "   [X] cannot read repository (token invalid?)" "Red"
         Set-ActiveTask ""
         return $false
     }
@@ -1075,13 +1076,13 @@ function Update-UnlockInternet {
     Write-C ("  remote: {0}..." -f $remote.Substring(0, 12)) "Gray"
     $a = (Read-Host "   update? [Y/n]").Trim().ToLower()
     if ($a -and $a -ne "y" -and $a -ne "yes") {
-        Write-C "  cancelled" "Yellow"
+        Write-C "   cancelled" "Yellow"
         Set-ActiveTask ""
         return $false
     }
 
     # ---- stop everything that holds files ----
-    Write-C "  stopping services + unmounting WinDivert..." "Yellow"
+    Write-C "   stopping services + unmounting WinDivert..." "Yellow"
     try { Stop-Zapret } catch {}
     try { Stop-Tgproxy } catch {}
     foreach ($sv in @("WinDivert14", "WinDivert")) { try { net.exe stop $sv 2>&1 | Out-Null } catch {} }
@@ -1180,7 +1181,7 @@ function Update-Zapret {
     Set-ActiveTask "updating zapret — fetching latest version..." "Cyan"
     $latest = Get-ZapretLatest
     if (-not $latest -or -not $latest.zip) {
-         Write-C "  [X] failed to fetch latest version info (no network?)" "Red"
+         Write-C "   [X] failed to fetch latest version info (no network?)" "Red"
         Set-ActiveTask ""
         return $false
     }
@@ -1189,7 +1190,7 @@ function Update-Zapret {
 
     # stop the launcher's zapret so it does not hold the files
     if ($Services.zapret -and $Services.zapret.proc -and -not $Services.zapret.proc.HasExited) {
-         Write-C "  stopping zapret before update..." "Yellow"
+         Write-C "   stopping zapret before update..." "Yellow"
         Stop-Zapret
         Start-Sleep -Milliseconds 600
     }
@@ -1369,7 +1370,7 @@ function Diagnose-TgProxy {
         if (Test-PythonCmd $c) { $pyCmd = $c; break }
     }
     if (-not $pyCmd) {
-        Write-C "  [X] PYTHON NOT FOUND. tg-proxy needs CPython 3.x." "Red"
+        Write-C "   [X] PYTHON NOT FOUND. tg-proxy needs CPython 3.x." "Red"
         Write-C "      install: https://www.python.org/downloads/  (tick 'Add python.exe to PATH')" "Yellow"
         Set-ActiveTask ""
         Pause-Back
@@ -1391,7 +1392,7 @@ function Diagnose-TgProxy {
         Write-C ("  [X] MISSING MODULES: {0}" -f ($missed -join ", ")) "Red"
         Write-C ("      run:  {0} -m pip install {1}" -f $pyCmd, ($missed -join " ")) "Yellow"
     } else {
-        Write-C "  [ok] required modules present (certifi, cryptography, ssl, asyncio)" "Green"
+        Write-C "   [ok] required modules present (certifi, cryptography, ssl, asyncio)" "Green"
     }
 
     # 3) actually import the proxy package (catches code import errors)
@@ -1410,13 +1411,13 @@ function Diagnose-TgProxy {
         '    traceback.print_exc()'
     )
     Set-Content -LiteralPath $impPy -Value ($impLines -join "`r`n") -Encoding ASCII
-    Write-C "  [..] importing proxy.tg_ws_proxy ..." "Gray"
+    Write-C "   [..] importing proxy.tg_ws_proxy ..." "Gray"
     $imp = Get-PyRun $pyCmd @($impPy)
     $impOut = $imp.Out
     if ($impOut -match "IMPORT_OK") {
-        Write-C "  [ok] proxy module imports cleanly" "Green"
+        Write-C "   [ok] proxy module imports cleanly" "Green"
     } else {
-        Write-C "  [X] proxy module import FAILED:" "Red"
+        Write-C "   [X] proxy module import FAILED:" "Red"
         ($impOut -split "`r?`n") | ForEach-Object { if ($_.Trim()) { Write-C ("      {0}" -f $_.TrimStart()) "DarkGray" } }
     }
 
@@ -1439,7 +1440,7 @@ function Diagnose-TgProxy {
     Set-Content -LiteralPath $bindPy -Value ($bindLines -join "`r`n") -Encoding ASCII
     $bind = Get-PyRun $pyCmd @($bindPy)
     $bindOut = $bind.Out
-    if ($bindOut -match "BIND_OK") { Write-C "  [ok] port $($def.port) is free/bindable" "Green" }
+    if ($bindOut -match "BIND_OK") { Write-C "   [ok] port $($def.port) is free/bindable" "Green" }
     else {
         Write-C ("  [X] CANNOT BIND port {0}:  {1}" -f $def.port, ($bindOut.Trim() -replace "`r?`n", " ")) "Red"
         Write-C "      port busy or blocked. close the app holding it, or change the port." "Yellow"
@@ -1544,7 +1545,7 @@ function Replace-ActiveFakes {
     $fakes = @(Get-ChildItem -LiteralPath $ZAPRET_BIN -Filter "*.bin" -File -ErrorAction SilentlyContinue |
                Where-Object { $_.BaseName -notlike "ACTIVE_*" } | Sort-Object Name)
     if ($fakes.Count -eq 0) {
-        Write-C "  [X] no .bin fake files in bin\" "Red"
+        Write-C "   [X] no .bin fake files in bin\" "Red"
         Write-C "      (download a zapret release that ships fake .bin files)" "Yellow"
         Pause-Back
         return
@@ -1561,27 +1562,29 @@ function Replace-ActiveFakes {
     $done = $false
     while (-not $done) {
         Write-C ""
-        Write-C "  Fake types:" "Cyan"
+        Write-C "   Fake types:" "Cyan"
         Write-C ("    1. Discord UDP     (current: {0})" -f $curDisc) "White"
         Write-C ("    2. GameFilter UDP  (current: {0})" -f $curGame) "White"
-        Write-C "  Fake files:" "Cyan"
+        Write-C "   Fake files:" "Cyan"
         $i = 0
         foreach ($f in $fakes) { $i++; Write-C ("    {0}. {1}" -f $i, $f.Name) "White" }
         Write-C ""
-        Write-C "  Enter 'type number'  (e.g. 1 4)   or   0 to exit" "Gray"
-        $sel = (Read-Host "  Choice").Trim()
+        Write-C "   Enter 'type number'  (e.g. 1 4)   or   0 to exit" "Gray"
+        Write-Host "  Choice: " -ForegroundColor Green -NoNewline
+        $sel = [System.Console]::ReadLine()
+        if ($sel) { $sel = $sel.Trim() }
         if ($sel -eq "0" -or $sel -eq "") { $done = $true; break }
         $parts = @($sel -split "\s+" | Where-Object { $_ -ne "" })
         if ($parts.Count -lt 2) {
-            Write-C "  need 'type number'" "Yellow"; Pause-Back; continue
+            Write-C "   need 'type number'" "Yellow"; Pause-Back; continue
         }
         $t = $parts[0]; $n = $parts[1]
         if ($t -notmatch "^[12]$" -or $n -notmatch "^\d+$") {
-            Write-C "  invalid choice" "Yellow"; Pause-Back; continue
+            Write-C "   invalid choice" "Yellow"; Pause-Back; continue
         }
         $idx = [int]$n
         if ($idx -lt 1 -or $idx -gt $fakes.Count) {
-            Write-C "  bad file number" "Yellow"; Pause-Back; continue
+            Write-C "   bad file number" "Yellow"; Pause-Back; continue
         }
 
         if    ($t -eq "1") { $active = $disc } else { $active = $game }
@@ -1603,58 +1606,58 @@ function Diagnose-Zapret {
     Write-C ""
 
     $r = Invoke-Native "sc.exe" @("query", "BFE")
-    if ($r.Out -match "RUNNING") { Write-C "  [ok] Base Filtering Engine: running" "Green" }
-    else                         { Write-C "  [X] Base Filtering Engine NOT running (required)" "Red" }
+    if ($r.Out -match "RUNNING") { Write-C "   [ok] Base Filtering Engine: running" "Green" }
+    else                         { Write-C "   [X] Base Filtering Engine NOT running (required)" "Red" }
 
     $r = Invoke-Native "netsh" @("interface", "tcp", "show", "global")
     $tsLine = (@($r.Out -split "`n" | Where-Object { $_ -match "Timestamp|timestamp" }) | Select-Object -First 1) + ""
-    if ($tsLine -match "enabled") { Write-C "  [ok] TCP timestamps: enabled" "Green" }
+    if ($tsLine -match "enabled") { Write-C "   [ok] TCP timestamps: enabled" "Green" }
     else {
-        Write-C "  [?] TCP timestamps disabled — enabling..." "Yellow"
+        Write-C "   [?] TCP timestamps disabled — enabling..." "Yellow"
         $r = Invoke-Native "netsh" @("interface", "tcp", "set", "global", "timestamps=enabled")
-        if ($r.Code -eq 0) { Write-C "  [ok] TCP timestamps enabled" "Green" }
-        else               { Write-C "  [X] failed to enable TCP timestamps" "Red" }
+        if ($r.Code -eq 0) { Write-C "   [ok] TCP timestamps enabled" "Green" }
+        else               { Write-C "   [X] failed to enable TCP timestamps" "Red" }
     }
 
     $px = $null
     try { $px = Get-ItemProperty "HKCU:\Software\Microsoft\Windows\CurrentVersion\Internet Settings" -ErrorAction Stop } catch {}
     if ($px -and [int]$px.ProxyEnable -eq 1) {
         Write-C ("  [?] System proxy enabled: {0} (make sure it's valid)" -f $px.ProxyServer) "Yellow"
-    } else { Write-C "  [ok] System proxy: off" "Green" }
+    } else { Write-C "   [ok] System proxy: off" "Green" }
 
     $allSvc = (Invoke-Native "sc.exe" @("query")).Out
 
     if (Get-Process -Name "AdguardSvc" -ErrorAction SilentlyContinue) {
-        Write-C "  [X] Adguard running — may conflict with Discord" "Red"
-    } else { Write-C "  [ok] Adguard: not running" "Green" }
+        Write-C "   [X] Adguard running — may conflict with Discord" "Red"
+    } else { Write-C "   [ok] Adguard: not running" "Green" }
 
     $conflicts = @("Killer", "TracSrvWrapper", "EPWD", "SmartByte", "GoodbyeDPI", "discordfix_zapret", "winws1", "winws2")
     $found = @()
     foreach ($bad in $conflicts) { if ($allSvc -match $bad) { $found += $bad } }
     if ($found.Count -gt 0) { Write-C ("  [X] conflicting service(s): {0}" -f ($found -join ", ")) "Red" }
-    else                    { Write-C "  [ok] no conflicting bypass services" "Green" }
+    else                    { Write-C "   [ok] no conflicting bypass services" "Green" }
 
     if ($allSvc -match "Intel" -and $allSvc -match "Connectivity" -and $allSvc -match "Network") {
-        Write-C "  [?] Intel Connectivity Network Service found — may conflict with zapret" "Yellow"
+        Write-C "   [?] Intel Connectivity Network Service found — may conflict with zapret" "Yellow"
     }
     if ($allSvc -match "VPN") {
-        Write-C "  [?] VPN service(s) present — disable all VPNs before testing" "Yellow"
-    } else { Write-C "  [ok] no VPN services" "Green" }
+        Write-C "   [?] VPN service(s) present — disable all VPNs before testing" "Yellow"
+    } else { Write-C "   [ok] no VPN services" "Green" }
 
     try {
         $doh = @((Get-ChildItem "HKLM:\System\CurrentControlSet\Services\Dnscache\InterfaceSpecificParameters" -ErrorAction SilentlyContinue |
                   Get-ItemProperty -ErrorAction SilentlyContinue) | Where-Object { $_.DohFlags -gt 0 })
-        if ($doh.Count -gt 0) { Write-C "  [?] Secure DNS (DoH) configured — verify it still works" "Yellow" }
-        else                  { Write-C "  [ok] Secure DNS (DoH): none" "Green" }
-    } catch { Write-C "  [ok] Secure DNS check: skipped" "Green" }
+        if ($doh.Count -gt 0) { Write-C "   [?] Secure DNS (DoH) configured — verify it still works" "Yellow" }
+        else                  { Write-C "   [ok] Secure DNS (DoH): none" "Green" }
+    } catch { Write-C "   [ok] Secure DNS check: skipped" "Green" }
 
-    if ($ZAPRET -match "OneDrive") { Write-C "  [X] zapret is in a OneDrive folder — move to e.g. C:\zapret" "Red" }
-    if ($ZAPRET -match "[\u0400-\u04FF]") { Write-C "  [?] zapret path has Cyrillic characters — may break some tools" "Yellow" }
+    if ($ZAPRET -match "OneDrive") { Write-C "   [X] zapret is in a OneDrive folder — move to e.g. C:\zapret" "Red" }
+    if ($ZAPRET -match "[\u0400-\u04FF]") { Write-C "   [?] zapret path has Cyrillic characters — may break some tools" "Yellow" }
 
     if (Get-ChildItem -LiteralPath $ZAPRET_BIN -Filter "*.sys" -ErrorAction SilentlyContinue) {
-        Write-C "  [ok] WinDivert driver present" "Green"
+        Write-C "   [ok] WinDivert driver present" "Green"
     } else {
-        Write-C "  [X] WinDivert64.sys NOT found in bin" "Red"
+        Write-C "   [X] WinDivert64.sys NOT found in bin" "Red"
     }
 
     Set-ActiveTask ""
@@ -1666,7 +1669,7 @@ function Diagnose-Zapret {
 function Run-ZapretTests {
     $test = Join-Path $ZAPRET "utils\test zapret.ps1"
     if (-not (Test-Path $test)) {
-        Write-C "  [X] utils\test zapret.ps1 not found" "Red"
+        Write-C "   [X] utils\test zapret.ps1 not found" "Red"
         Pause-Back
         return
     }
@@ -1778,22 +1781,25 @@ function Main {
          Write-MenuRow "10" "" "" "" "diagnose zapret environment"  "White" $null "" $null ""
          Write-MenuRow "11" "" "" "" "run zapret tests (utils)"     "White" $null "" $null ""
         Write-C ""
+
+        Write-Header "TG-PROXY SETTINGS" "Gray"
+         Write-MenuRow "14" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
+        Write-C ""
         Write-Header "UPDATE" "Yellow"
          Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
          Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
         Write-C ""
-        Write-Header "ACTIONS" "Gray"
-         Write-MenuRow "14" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
-         Write-MenuRow "15" "" "" "" "live dashboard (Q/Esc to exit)"           "Gray" $null "" $null ""
          Write-C "   -- exit --" "DarkGray"
           Write-C "   [0] Quit" "White"
         Write-C ""
-        $sel = (Read-Host "   Choice").Trim()
+        Write-Host "   Choice: " -ForegroundColor Green -NoNewline
+        $sel = [System.Console]::ReadLine()
+        if ($sel) { $sel = $sel.Trim() }
 
         switch -Wildcard ($sel) {
             "1" {
                 if ($zOn) {
-                    Write-C "  stopping zapret (incl. external)..." "Yellow"
+                    Write-C "   stopping zapret (incl. external)..." "Yellow"
                     Stop-Zapret
                 } else {
                     if ($ZAPRET_BTS.Count -eq 0) {
@@ -1817,7 +1823,7 @@ function Main {
             }
             "2" {
                 if ($tOn) {
-                    Write-C "  stopping tg-proxy (incl. external)..." "Yellow"
+                    Write-C "   stopping tg-proxy (incl. external)..." "Yellow"
                     Stop-Tgproxy
                 } else {
                     $h = "127.0.0.1"; $p = 1443; $s = $null
@@ -1838,7 +1844,7 @@ function Main {
                 Pause-Back
             }
             "3" {
-                Write-C "  stopping everything (incl. external)..." "Yellow"
+                Write-C "   stopping everything (incl. external)..." "Yellow"
                 Kill-All
                 Pause-Back
             }
@@ -1854,13 +1860,15 @@ function Main {
                 Write-C "    [1] TCP + UDP" "White"
                 Write-C "    [2] TCP only" "White"
                 Write-C "    [3] UDP only" "White"
-                $c = (Read-Host "  Choice").Trim()
+                Write-Host "  Choice: " -ForegroundColor Green -NoNewline
+                $c = [System.Console]::ReadLine()
+                if ($c) { $c = $c.Trim() }
                 $map = @{ "0"=""; "1"="all"; "2"="tcp"; "3"="udp" }
                 if ($map.ContainsKey($c)) {
                     Set-ZGameFilter $map[$c]
                     Write-C ("  [ok] game filter: {0}" -f $(if ($map[$c]) { (Get-ZGameFilterState).state } else { "off" })) "Green"
                     Write-C "      restart zapret to apply" "DarkGray"
-                } else { Write-C "  invalid" "Red" }
+                } else { Write-C "   invalid" "Red" }
                 Pause-Back
             }
             "7" {
@@ -1869,13 +1877,15 @@ function Main {
                 Write-C "    [1] loaded (specific IPs)" "White"
                 Write-C "    [2] none (bypass nothing by IP)" "White"
                 Write-C "    [3] any (bypass all by IP)" "White"
-                $c = (Read-Host "  Choice").Trim()
+                Write-Host "  Choice: " -ForegroundColor Green -NoNewline
+                $c = [System.Console]::ReadLine()
+                if ($c) { $c = $c.Trim() }
                 $map = @{ "1"="loaded"; "2"="none"; "3"="any" }
                 if ($map.ContainsKey($c)) {
                     [void](Set-ZIpsetFilter $map[$c])
                     Write-C ("  [ok] ipset filter: {0}" -f (Get-ZIpsetFilterState).state) "Green"
                     Write-C "      restart zapret to apply" "DarkGray"
-                } else { Write-C "  invalid" "Red" }
+                } else { Write-C "   invalid" "Red" }
                 Pause-Back
             }
             "8" {
@@ -1905,7 +1915,7 @@ function Main {
             }
             "13" {
                 if (-not (Test-Admin)) {
-                    Write-C "  [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
+                    Write-C "   [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
                     Pause-Back
                     continue
                 }
@@ -1915,15 +1925,12 @@ function Main {
             "14" {
                 [void](Diagnose-TgProxy)
             }
-            "15" {
-                Start-Dashboard
-            }
             "0" {
-                Write-C "  stopping everything (incl. external)..." "Yellow"
+                Write-C "   stopping everything (incl. external)..." "Yellow"
                 Kill-All
                 return
             }
-            default { if ($sel -ne "") { Write-C "  invalid choice" "Red"; Start-Sleep 1 } }
+            default { if ($sel -ne "") { Write-C "   invalid choice" "Red"; Start-Sleep 1 } }
         }
     }
 }

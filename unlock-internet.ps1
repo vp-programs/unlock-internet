@@ -1669,80 +1669,6 @@ function Set-UacMin {
     }
 }
 
-# ------------------------- zapret settings submenu -------------------------
-function Show-ZapretSettings {
-    while ($true) {
-        cls
-        Draw-Banner
-        $zg  = Get-ZGameFilterState
-        $zi  = Get-ZIpsetFilterState
-        $zcu = Get-ZCheckUpdatesState
-        Write-Header "ZAPRET SETTINGS" "Magenta"
-        Write-C ("   [1] Game Filter        (current: {0})" -f $zg.state) "White"
-        Write-C ("   [2] IPSet Filter       (current: {0})" -f $zi.state) "White"
-        Write-C ("   [3] Auto-Update Check  (current: {0})" -f $zcu.state) "White"
-        Write-C "   [4] Replace active fakes (.bin)" "White"
-        Write-C "   [5] Diagnose zapret environment (conflicts)" "White"
-        Write-C "   [6] Run zapret tests (utils)" "White"
-        Write-C ""
-        Write-C "   [0] Back to main menu" "Yellow"
-        Write-C ""
-        $sel = (Read-Host "   Choice").Trim()
-        switch ($sel) {
-            "1" {
-                Write-C ""
-                Write-C ("  current: {0}" -f (Get-ZGameFilterState).state) "Gray"
-                Write-C "    [0] Off" "White"
-                Write-C "    [1] TCP + UDP" "White"
-                Write-C "    [2] TCP only" "White"
-                Write-C "    [3] UDP only" "White"
-                $c = (Read-Host "  Choice").Trim()
-                $map = @{ "0"=""; "1"="all"; "2"="tcp"; "3"="udp" }
-                if ($map.ContainsKey($c)) {
-                    Set-ZGameFilter $map[$c]
-                    Write-C ("  [ok] game filter: {0}" -f $(if ($map[$c]) { (Get-ZGameFilterState).state } else { "off" })) "Green"
-                    Write-C "      restart zapret to apply" "DarkGray"
-                } else { Write-C "  invalid" "Red" }
-                Pause-Back
-            }
-            "2" {
-                Write-C ""
-                Write-C ("  current: {0}" -f (Get-ZIpsetFilterState).state) "Gray"
-                Write-C "    [1] loaded (specific IPs)" "White"
-                Write-C "    [2] none (bypass nothing by IP)" "White"
-                Write-C "    [3] any (bypass all by IP)" "White"
-                $c = (Read-Host "  Choice").Trim()
-                $map = @{ "1"="loaded"; "2"="none"; "3"="any" }
-                if ($map.ContainsKey($c)) {
-                    [void](Set-ZIpsetFilter $map[$c])
-                    Write-C ("  [ok] ipset filter: {0}" -f (Get-ZIpsetFilterState).state) "Green"
-                    Write-C "      restart zapret to apply" "DarkGray"
-                } else { Write-C "  invalid" "Red" }
-                Pause-Back
-            }
-            "3" {
-                $st = Get-ZCheckUpdatesState
-                $on = -not $st.on
-                Set-ZCheckUpdates $on
-                $lbl = if ($on) { "enabled" } else { "disabled" }
-                Write-C ("  [ok] auto-update check: {0}" -f $lbl) "Green"
-                Pause-Back
-            }
-            "4" {
-                Replace-ActiveFakes
-            }
-            "5" {
-                Diagnose-Zapret
-            }
-            "6" {
-                Run-ZapretTests
-            }
-            "0" { return }
-            default { if ($sel -ne "") { Write-C "  invalid choice" "Red"; Start-Sleep 1 } }
-        }
-    }
-}
-
 # ----------------------------------- Menu -----------------------------------
 function Main {
     $Host.UI.RawUI.WindowTitle = "UNLOCK INTERNET"
@@ -1766,24 +1692,27 @@ function Main {
         $tExt = if (-not $tMine) { "  (external)" } else { "" }
         $tHost = if ($tMine) { $Services.tgproxy.host } else { $def.host }
         $tPort = if ($tMine) { $Services.tgproxy.port } else { $def.port }
-         Write-Header "SERVICES" "Cyan"
+        Write-Header "SERVICES" "Cyan"
         $colW = 30  # the column where the version starts (same for both services)
         $stZ = Get-StateToken $zOn
         $zVer = Get-ZapretVersion
         $zTail = ("  {0}{1}" -f $stZ.word, $zPid).PadRight($colW) + "  v" + $zVer
-        Write-ColorParts @("   ZAPRET   : ", "White", $stZ.token, $stZ.color, $zTail, "White")
+        Write-ColorParts @("   [1] ZAPRET   : ", "Cyan", $stZ.token, $stZ.color, $zTail, "White", "   launch", "DarkGray")
+        Write-ColorParts @("   [2] ZAPRET   : ", "Yellow", $stZ.token, $stZ.color, $zTail, "White", "   stop", "DarkGray")
         $stT = Get-StateToken $tOn
         $tVer = Get-TgProxyVersion
         $tBody = if ($tOn) { "  {0}  {1}:{2}" -f $stT.word, $tHost, $tPort } else { "  {0}" -f $stT.word }
         $tTail = $tBody.PadRight($colW) + "  v" + $tVer
-        Write-ColorParts @("   TG-PROXY : ", "White", $stT.token, $stT.color, $tTail, "White")
+        Write-ColorParts @("   [3] TG-PROXY : ", "Cyan", $stT.token, $stT.color, $tTail, "White", "   launch", "DarkGray")
+        Write-ColorParts @("   [4] TG-PROXY : ", "Yellow", $stT.token, $stT.color, $tTail, "White", "   stop", "DarkGray")
+        Write-C ("   [5] STOP   everything  (zapret + tg-proxy)") "DarkYellow"
         Write-C ""
         Write-Header "UNLOCK INTERNET SETTINGS" "Magenta"
         $auto = Get-AutoStartState
         $stA = Get-StateToken $auto
         if ($auto) { $aTail = "  enabled (launch with Windows)" }
         else       { $aTail = "  disabled" }
-         Write-ColorParts @("   AUTOSTART : ", "White", $stA.token, $stA.color, $aTail, "White")
+         Write-ColorParts @("   [6] AUTOSTART : ", "White", $stA.token, "Cyan", $aTail, "White", "   toggle", "DarkGray")
          $lc = Read-LastConfig
         $lastDesc = "none"
         if ($lc) {
@@ -1804,31 +1733,23 @@ function Main {
          $zg = Get-ZGameFilterState
          $gOn = $zg.state -ne "disabled"
          $stG = Get-StateToken $gOn
-         Write-ColorParts @("   GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White")
+         Write-ColorParts @("   [7] GAME FILT : ", "White", $stG.token, $stG.color, ("  {0}" -f $zg.state), "White", "   change", "DarkGray")
          $zi = Get-ZIpsetFilterState
          $stI = Get-StateToken ($zi.state -ne "none")
-         Write-ColorParts @("   IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White")
+         Write-ColorParts @("   [8] IPSET     : ", "White", $stI.token, $stI.color, ("  {0}" -f $zi.state), "White", "   change", "DarkGray")
          $zcu = Get-ZCheckUpdatesState
          $stC = Get-StateToken $zcu.on
-         Write-ColorParts @("   AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White")
+         Write-ColorParts @("   [9] AUTOPDATE : ", "White", $stC.token, $stC.color, ("  {0}" -f $zcu.state), "White", "   toggle", "DarkGray")
+         Write-C "   [10] Replace active fakes (.bin)" "White"
+         Write-C "   [11] Diagnose zapret environment (conflicts)" "White"
+         Write-C "   [12] Run zapret tests (utils)" "White"
         Write-C ""
         Write-Header "ACTIONS" "White"
-        Write-C "   -- services --" "DarkGray"
-        Write-C "   [1] Launch ZAPRET  (choose bat-profile)" "Cyan"
-        Write-C "   [2] Launch TG-PROXY" "Cyan"
-        Write-C "   [3] Stop ZAPRET     (incl. external)" "Yellow"
-        Write-C "   [4] Stop TG-PROXY   (incl. external)" "Yellow"
-        Write-C ("   [5] Stop everything  (zapret + tg-proxy)") "DarkYellow"
-        Write-C "   -- settings --" "DarkGray"
-        if ($auto) { Write-C "   [6] Remove from autostart" "White" }
-        else       { Write-C "   [6] Launch with Windows (autostart)" "White" }
-        Write-C "   [7] UAC: minimize (no Y/N prompts)" "White"
-        Write-C "   [8] ZAPRET SETTINGS  (menu of zapret options)" "White"
-         Write-C "   -- tools --" "DarkGray"
-         Write-C "   [9] Diagnose tg-proxy (why it won't start)" "White"
-          Write-C "   [10] Update ZAPRET (download latest release)" "Cyan"
-         Write-C "   [11] Update unlock-internet (from GitHub)" "Cyan"
-          Write-C "   [12] Live dashboard (Q/Esc to exit)" "Gray"
+         Write-C "   [13] Diagnose tg-proxy (why it won't start)" "White"
+          Write-C "   [14] Update ZAPRET (download latest release)" "Cyan"
+         Write-C "   [15] Update unlock-internet (from GitHub)" "Cyan"
+          Write-C "   [16] Live dashboard (Q/Esc to exit)" "Gray"
+          Write-C "   [17] UAC: minimize (no Y/N prompts)" "White"
           Write-C "   -- exit --" "DarkGray"
         Write-C "   [0] Quit" "White"
         Write-C ""
@@ -1860,6 +1781,11 @@ function Main {
                 Pause-Back
             }
             "2" {
+                Write-C "  stopping zapret (incl. external)..." "Yellow"
+                Stop-Zapret
+                Pause-Back
+            }
+            "3" {
                 if ($tOn) {
                      Write-C "  proxy is already running" "Yellow"
                     Pause-Back
@@ -1881,11 +1807,6 @@ function Main {
                 [void](Start-TgProxy $h $p $s)
                 Pause-Back
             }
-            "3" {
-                Write-C "  stopping zapret (incl. external)..." "Yellow"
-                Stop-Zapret
-                Pause-Back
-            }
             "4" {
                 Write-C "  stopping tg-proxy (incl. external)..." "Yellow"
                 Stop-Tgproxy
@@ -1902,20 +1823,61 @@ function Main {
                 Pause-Back
             }
             "7" {
-                [void](Set-UacMin)
+                Write-C ""
+                Write-C ("  current: {0}" -f (Get-ZGameFilterState).state) "Gray"
+                Write-C "    [0] Off" "White"
+                Write-C "    [1] TCP + UDP" "White"
+                Write-C "    [2] TCP only" "White"
+                Write-C "    [3] UDP only" "White"
+                $c = (Read-Host "  Choice").Trim()
+                $map = @{ "0"=""; "1"="all"; "2"="tcp"; "3"="udp" }
+                if ($map.ContainsKey($c)) {
+                    Set-ZGameFilter $map[$c]
+                    Write-C ("  [ok] game filter: {0}" -f $(if ($map[$c]) { (Get-ZGameFilterState).state } else { "off" })) "Green"
+                    Write-C "      restart zapret to apply" "DarkGray"
+                } else { Write-C "  invalid" "Red" }
                 Pause-Back
             }
             "8" {
-                Show-ZapretSettings
+                Write-C ""
+                Write-C ("  current: {0}" -f (Get-ZIpsetFilterState).state) "Gray"
+                Write-C "    [1] loaded (specific IPs)" "White"
+                Write-C "    [2] none (bypass nothing by IP)" "White"
+                Write-C "    [3] any (bypass all by IP)" "White"
+                $c = (Read-Host "  Choice").Trim()
+                $map = @{ "1"="loaded"; "2"="none"; "3"="any" }
+                if ($map.ContainsKey($c)) {
+                    [void](Set-ZIpsetFilter $map[$c])
+                    Write-C ("  [ok] ipset filter: {0}" -f (Get-ZIpsetFilterState).state) "Green"
+                    Write-C "      restart zapret to apply" "DarkGray"
+                } else { Write-C "  invalid" "Red" }
+                Pause-Back
             }
             "9" {
-                [void](Diagnose-TgProxy)
+                $st = Get-ZCheckUpdatesState
+                $on = -not $st.on
+                Set-ZCheckUpdates $on
+                $lbl = if ($on) { "enabled" } else { "disabled" }
+                Write-C ("  [ok] auto-update check: {0}" -f $lbl) "Green"
+                Pause-Back
             }
             "10" {
+                Replace-ActiveFakes
+            }
+            "11" {
+                Diagnose-Zapret
+            }
+            "12" {
+                Run-ZapretTests
+            }
+            "13" {
+                [void](Diagnose-TgProxy)
+            }
+            "14" {
                 [void](Update-Zapret)
                 Pause-Back
             }
-            "11" {
+            "15" {
                 if (-not (Test-Admin)) {
                     Write-C "  [X] Update unlock-internet needs Administrator (stops running services first)." "Red"
                     Pause-Back
@@ -1924,8 +1886,12 @@ function Main {
                 [void](Update-UnlockInternet)
                 Pause-Back
             }
-            "12" {
+            "16" {
                 Start-Dashboard
+            }
+            "17" {
+                [void](Set-UacMin)
+                Pause-Back
             }
             "0" {
                 Write-C "  stopping everything (incl. external)..." "Yellow"

@@ -747,6 +747,9 @@ function Start-TgProxy([string]$hostX, [int]$portX, [string]$secret) {
     $pyCmd = Ensure-Python
     if ($null -eq $pyCmd) { Set-ActiveTask ""; return $false }
     Ensure-PipModule $pyCmd "certifi"
+    # cryptography: _aes.py falls back to system libcrypto if missing, but
+    # Windows has no libcrypto — so on Win the proxy REQUIRES cryptography.
+    Ensure-PipModule $pyCmd "cryptography"
 
     $pyArgs = "-u proxy/tg_ws_proxy.py --host {0} --port {1}" -f $hostX, $portX
     if ($pyCmd -eq "py") { $pyArgs = "-3 " + $pyArgs }
@@ -924,6 +927,36 @@ function Get-UiaHeadSha([string]$token) {
     } catch { return $null }
 }
 
+# ----------------------- unlock-internet self-restart -----------------------
+# relaunches the launcher as a fresh elevated process (so it loads the NEW code)
+# and signals the caller to exit. The new instance auto-restores the last config,
+# so services come back up on their own.
+function Restart-UnlockInternet {
+    $here = $ROOT
+    $ps1 = Join-Path $here "unlock-internet.ps1"
+    if (-not (Test-Path $ps1)) { $ps1 = $PSCommandPath }
+    Write-C "   relaunching unlock-internet (new version)..." "Cyan"
+    Write-C "   this window will close; a fresh copy opens with your last config." "DarkGray"
+    $elevArgs = @(
+        '"-NoProfile"', '"-ExecutionPolicy"', '"Bypass"',
+        '"-File"', '"' + $ps1 + '"'
+    )
+    # launch a NEW powershell running the updated .ps1 in a fresh process tree.
+    # If we already run as admin, the child inherits the token (no UAC prompt) and
+    # the script skips its own elevation. If we are not admin, the script will
+    # self-elevate on start.
+    try {
+        Start-Process powershell.exe -ArgumentList $elevArgs -WorkingDirectory $here
+    } catch {
+        Write-C ("   [X] could not relaunch: {0}" -f $_.Exception.Message) "Red"
+        Write-C "   restart the launcher manually." "Yellow"
+        return $false
+    }
+    # let the new process auto-restore the last config / release file locks, then quit
+    Start-Sleep -Milliseconds 800
+    return $true
+}
+
 # downloads the repo tarball at a given sha and flattens it into $dst using the
 # built-in Windows tar.exe (libarchive handles .tar.gz). Creates $dst if needed.
 function Sync-FolderFromTar([string]$token, [string]$sha, [string]$dst) {
@@ -1083,10 +1116,13 @@ function Update-UnlockInternet {
 
     $newVerShown = (Get-AppVersion)
     Write-C ("  [ok] unlock-internet updated to {0}... ({1} files)  ->  v{2}" -f $remote.Substring(0, 10), $res.copied, $newVerShown) "Green"
-    Write-C "      restart the launcher to use the new version." "Cyan"
     Add-Log ("[mgr] unlock-internet updated to {0} (v{1})" -f $remote.Substring(0, 10), $newVerShown) "Green"
     Set-ActiveTask ""
-    return $true
+
+    # ---- relaunch with the new version ----
+    Write-C ""
+    Restart-UnlockInternet
+    exit 0
 }
 
 # ------------------------------ zapret auto-update ------------------------------
@@ -1307,8 +1343,9 @@ function Diagnose-TgProxy {
     Write-C ("  [ok] {0}" -f $verLine) "Green"
 
     # 2) required modules importable?
-    $modules = @("certifi","ssl","asyncio","socket")
-    $optMods = @("cryptography")
+    # cryptography is REQUIRED here: _aes.py's fallback needs system libcrypto
+    # (OpenSSL), which Windows does not ship — so on Win the proxy must have it.
+    $modules = @("certifi","cryptography","ssl","asyncio","socket")
     $missed = @()
     foreach ($m in $modules) {
         $r = Get-PyRun $pyCmd "import $m; print('ok')"
@@ -1316,15 +1353,9 @@ function Diagnose-TgProxy {
     }
     if ($missed.Count -gt 0) {
         Write-C ("  [X] MISSING MODULES: {0}" -f ($missed -join ", ")) "Red"
-        Write-C "      run:  {0} -m pip install certifi" -f $pyCmd "Yellow"
+        Write-C ("      run:  {0} -m pip install {1}" -f $pyCmd, ($missed -join " ")) "Yellow"
     } else {
-        Write-C "  [ok] required modules present (certifi, ssl, asyncio)" "Green"
-    }
-    foreach ($m in $optMods) {
-        $r = Get-PyRun $pyCmd "import $m; print('ok')"
-        if ($r.Exit -ne 0 -or $r.Out -notmatch "ok") {
-            Write-C ("  [!] optional '{0}' missing (uses ctypes fallback, ok)" -f $m) "DarkYellow"
-        } else { Write-C ("  [ok] optional '{0}'" -f $m) "Green" }
+        Write-C "  [ok] required modules present (certifi, cryptography, ssl, asyncio)" "Green"
     }
 
     # 3) actually import the proxy package (catches code import errors)

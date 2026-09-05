@@ -612,17 +612,22 @@ function Refresh-Path {
     } catch {}
 }
 
-# run a `python -c` snippet and capture output + exit code.
-# relaxes $ErrorActionPreference for the duration so a native stderr write
-# (e.g. a missing-module traceback) does NOT escalate to a terminating error
-# under Set-StrictMode + $ErrorActionPreference='Stop'.
-function Get-PyRun([string]$pyCmd, [string]$pyCode) {
+# Run a python command and capture output + exit code.
+# $pyArgs may be a single snippet (run via `python -c <snippet>`) OR an array of
+# raw arguments (e.g. a script path + its args). It relaxes $ErrorActionPreference
+# for the duration so a native stderr write (e.g. a missing-module traceback) does
+# NOT escalate to a terminating error under Set-StrictMode + $ErrorActionPreference='Stop'.
+function Get-PyRun([string]$pyCmd, [object]$pyArgs) {
     $prevEap = $ErrorActionPreference
     $ErrorActionPreference = "SilentlyContinue"
     $out  = ""
     $exit = 1
     try {
-        $out  = (& $pyCmd -c $pyCode 2>&1) -join " "
+        if ($pyArgs -is [string]) {
+            $out  = (& $pyCmd -c $pyArgs 2>&1) -join " "
+        } else {
+            $out  = (& $pyCmd @pyArgs 2>&1) -join " "
+        }
         $exit = $LASTEXITCODE
     } catch {}
     finally {
@@ -1339,7 +1344,8 @@ function Diagnose-TgProxy {
     )
     Set-Content -LiteralPath $impPy -Value ($impLines -join "`r`n") -Encoding ASCII
     Write-C "  [..] importing proxy.tg_ws_proxy ..." "Gray"
-    $impOut = (& $pyCmd $impPy 2>&1) | Out-String
+    $imp = Get-PyRun $pyCmd @($impPy)
+    $impOut = $imp.Out
     if ($impOut -match "IMPORT_OK") {
         Write-C "  [ok] proxy module imports cleanly" "Green"
     } else {
@@ -1364,7 +1370,8 @@ function Diagnose-TgProxy {
         '    s.close()'
     )
     Set-Content -LiteralPath $bindPy -Value ($bindLines -join "`r`n") -Encoding ASCII
-    $bindOut = (& $pyCmd $bindPy 2>&1) | Out-String
+    $bind = Get-PyRun $pyCmd @($bindPy)
+    $bindOut = $bind.Out
     if ($bindOut -match "BIND_OK") { Write-C "  [ok] port $($def.port) is free/bindable" "Green" }
     else {
         Write-C ("  [X] CANNOT BIND port {0}:  {1}" -f $def.port, ($bindOut.Trim() -replace "`r?`n", " ")) "Red"

@@ -253,10 +253,9 @@ function Write-ColorParts([object[]]$parts) {
     Write-Host ""
 }
 
-# column layout for a status row (services + settings):
-#   [N] LABEL  STATE  VALUE  VERSION  HINT
-# every field is padded to a fixed width so all rows (and the trailing
-# action hint) line up in the same columns.
+# layout for a status row: exactly two columns — [N] and the row text.
+# fields (label, state, value, version, hint) are joined as one free-form
+# text field after the number.
 function Write-MenuRow {
     param(
         [string]$num,
@@ -266,28 +265,24 @@ function Write-MenuRow {
         [string]$version = $null, [string]$versionColor = "White",
         [string]$hint = $null, [string]$hintColor = "DarkGray"
     )
-    $wLead  = 3; $wNum = 4; $wName = 14; $wState = 6; $wValue = 34; $wVer = 10
-    $numCol   = ("[{0}]" -f $num).PadRight($wNum)
-    if ([string]::IsNullOrEmpty($name)) { $nameCol = (" " * $wName) } else { $nameCol = ($name + " :").PadRight($wName) }
-    $stateCol = if ([string]::IsNullOrEmpty($state)) { (" " * $wState) } else { $state.PadRight($wState) }
-    $valCol   = $value.PadRight($wValue)
-    if ([string]::IsNullOrEmpty($version)) { $verCol = (" " * $wVer) } else { $verCol = (" v" + $version).PadRight($wVer) }
+    $wLead  = 3; $wNum = 4
     if ([string]::IsNullOrEmpty($stateColor))   { $stateColor   = "White" }
     if ([string]::IsNullOrEmpty($valueColor))   { $valueColor   = "White" }
     if ([string]::IsNullOrEmpty($versionColor)) { $versionColor = "White" }
     if ([string]::IsNullOrEmpty($hintColor))    { $hintColor    = "DarkGray" }
 
     $flat = New-Object System.Collections.Generic.List[object]
-    [void]$flat.Add((" " * $wLead + $numCol)); [void]$flat.Add("White")
-    [void]$flat.Add($nameCol);                 [void]$flat.Add("White")
-    [void]$flat.Add($stateCol);                [void]$flat.Add($stateColor)
-    [void]$flat.Add($valCol);                  [void]$flat.Add($valueColor)
-    [void]$flat.Add($verCol);                  [void]$flat.Add($versionColor)
-    if ([string]::IsNullOrEmpty($hint)) {
-        # nothing more to print; skip blank hint
-    } else {
-        [void]$flat.Add("  " + $hint)
-        [void]$flat.Add($hintColor)
+    [void]$flat.Add((" " * $wLead + ("[{0}]" -f $num).PadRight($wNum))); [void]$flat.Add("White")
+
+    $fields = @()
+    if (-not [string]::IsNullOrEmpty($state))   { $fields += ,@($state, $stateColor) }
+    if (-not [string]::IsNullOrEmpty($name))    { $fields += ,@($name, "White") }
+    if (-not [string]::IsNullOrEmpty($value))   { $fields += ,@($value, $valueColor) }
+    if (-not [string]::IsNullOrEmpty($version)) { $vTxt = "v" + $version; $fields += ,@($vTxt, $versionColor) }
+    if (-not [string]::IsNullOrEmpty($hint))    { $fields += ,@($hint, $hintColor) }
+    foreach ($f in $fields) {
+        $clean = ($f[0] -replace '\s*\([^)]*\)', "").Trim()
+        if ($clean) { [void]$flat.Add("  " + $clean); [void]$flat.Add($f[1]) }
     }
     Write-ColorParts $flat.ToArray()
 }
@@ -1721,6 +1716,22 @@ function Main {
     while ($true) {
         cls
         Draw-Banner
+         $lc = Read-LastConfig
+        $lastDesc = "none"
+        if ($lc) {
+            $zRaw = Get-Prop $lc "zapretRunning"
+            $tRaw = Get-Prop $lc "tgproxyRunning"
+            $zState = if ($null -eq $zRaw) { "?" } elseif ($zRaw) { "ON" } else { "OFF" }
+            $tState = if ($null -eq $tRaw) { "?" } elseif ($tRaw) { "ON" } else { "OFF" }
+            $lbat = [string](Get-Prop $lc "zapretBat")
+            $lhost = [string](Get-Prop $lc "host")
+            $lport = [int](Get-Prop $lc "port")
+            $leaf = if ($lbat) { (Split-Path $lbat -Leaf) } else { "no-bat" }
+            $lastDesc = ("{0}  +  {1}:{2}" -f $leaf, $lhost, $lport)
+            $lastDesc += ("  [zapret {0} | tg-proxy {1}]" -f $zState, $tState)
+        }
+         Write-ColorParts @("   LAST CONF ", "DarkGray", $lastDesc, "DarkGray")
+        Write-C ""
         # status by REAL system processes
         $zOn = Get-ZapretRunning
         $def = Get-TgProxyDefaults
@@ -1749,22 +1760,6 @@ function Main {
         $stA = Get-StateToken $auto
         $aVal = if ($auto) { "enabled (launch with Windows)" } else { "disabled" }
         Write-MenuRow "4" "AUTOSTART" $stA.token "Cyan" $aVal "White" $null "" $null "toggle"
-         $lc = Read-LastConfig
-        $lastDesc = "none"
-        if ($lc) {
-            $zRaw = Get-Prop $lc "zapretRunning"
-            $tRaw = Get-Prop $lc "tgproxyRunning"
-            $zState = if ($null -eq $zRaw) { "?" } elseif ($zRaw) { "ON" } else { "OFF" }
-            $tState = if ($null -eq $tRaw) { "?" } elseif ($tRaw) { "ON" } else { "OFF" }
-            $lbat = [string](Get-Prop $lc "zapretBat")
-            $lhost = [string](Get-Prop $lc "host")
-            $lport = [int](Get-Prop $lc "port")
-            $leaf = if ($lbat) { (Split-Path $lbat -Leaf) } else { "no-bat" }
-            $lastDesc = ("{0}  +  {1}:{2}" -f $leaf, $lhost, $lport)
-            $lastDesc += ("  [zapret {0} | tg-proxy {1}]" -f $zState, $tState)
-        }
-         $lcPrefix = ("   " + ("LAST CONF").PadRight(3 + 4 + 14 + 6))
-         Write-ColorParts @($lcPrefix, "Gray", $lastDesc, "Gray")
         Write-C ""
         Write-Header "ZAPRET SETTINGS" "Magenta"
          $zg = Get-ZGameFilterState
@@ -1780,14 +1775,15 @@ function Main {
          Write-MenuRow "9"  "" "" "" "diagnose zapret environment"  "White" $null "" $null ""
          Write-MenuRow "10" "" "" "" "run zapret tests (utils)"     "White" $null "" $null ""
         Write-C ""
-        Write-Header "ACTIONS" "White"
+        Write-Header "ACTIONS" "DarkYellow"
          Write-MenuRow "11" "" "" "" "diagnose tg-proxy (why it won't start)" "White" $null "" $null ""
          Write-MenuRow "12" "" "" "" "update ZAPRET (download latest release)" "Cyan" $null "" $null ""
          Write-MenuRow "13" "" "" "" "update unlock-internet (from GitHub)"   "Cyan" $null "" $null ""
          Write-MenuRow "14" "" "" "" "live dashboard (Q/Esc to exit)"           "Gray" $null "" $null ""
          Write-MenuRow "15" "" "" "" "UAC: minimize (no Y/N prompts)"           "White" $null "" $null ""
-         Write-C "   -- exit --" "DarkGray"
-         Write-C "   [0] Quit" "White"
+          Write-C "   -- exit --" "DarkGray"
+          Write-C "   [0] Quit" "White"
+        Write-C ""
         $sel = (Read-Host "   Choice").Trim()
 
         switch -Wildcard ($sel) {
